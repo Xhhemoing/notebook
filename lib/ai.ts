@@ -1,28 +1,646 @@
-import { GoogleGenAI, Type } from '@google/genai';
-import { Memory, KnowledgeNode, Subject, MemoryFunction, MemoryPurpose, Settings } from './types';
-import { v4 as uuidv4 } from 'uuid';
+import { GoogleGenAI, Type, FunctionDeclaration, ThinkingLevel } from '@google/genai';
+import { 
+  Memory, 
+  KnowledgeNode, 
+  Subject, 
+  MemoryFunction, 
+  MemoryPurpose, 
+  Settings, 
+  CustomModel,
+  Textbook,
+  TextbookPage,
+  ReviewPlan,
+  ReviewPlanItem
+} from './types';
 
-const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
+// ... (existing imports)
+
+// Helper to get the global AI instance
+function getGlobalAI() {
+  return new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
+}
+
+/**
+ * Helper to get embeddings for text or image
+ */
+export async function getEmbedding(
+  content: string | { data: string, mimeType: string } | (string | { inlineData: { data: string, mimeType: string } })[],
+  settings?: Settings
+): Promise<number[]> {
+  const modelId = settings?.embeddingModel || 'gemini-embedding-2-preview';
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(modelId, settings || {} as Settings);
+
+  let contents: any[];
+  if (Array.isArray(content)) {
+    contents = content;
+  } else if (typeof content === 'string') {
+    contents = [content];
+  } else {
+    contents = [{ inlineData: content }];
+  }
+
+  if (isCustomOpenAI && customModel) {
+    // OpenAI embeddings only support text
+    const textContent = contents.filter(c => typeof c === 'string').join(' ');
+    if (!textContent) {
+      throw new Error('OpenAI embeddings only support text content');
+    }
+    const response = await fetch(customModel.baseUrl || 'https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${customModel.apiKey}`
+      },
+      body: JSON.stringify({
+        model: customModel.modelId,
+        input: textContent
+      })
+    });
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`OpenAI Embedding API error: ${err}`);
+    }
+    const data = await response.json();
+    return data.data[0].embedding;
+  } else if (client) {
+    const result = await client.models.embedContent({
+      model: modelName,
+      contents: contents as any
+    });
+    if (!result.embeddings || result.embeddings.length === 0) {
+      throw new Error('Failed to get embeddings');
+    }
+    const values = result.embeddings[0].values;
+    if (!values) {
+      throw new Error('Failed to get embedding values');
+    }
+    return values;
+  }
+  
+  throw new Error('Failed to initialize AI client for embeddings');
+}
+
+/**
+ * Process a full PDF textbook: OCR and generate embeddings for all pages
+ */
+export async function processTextbookPDF(
+  pdfBase64: string,
+  settings: Settings,
+  logCallback?: (log: any) => void
+): Promise<{ pageNumber: number; content: string }[]> {
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(settings.parseModel, settings);
+  
+  const prompt = `你是一个专业的课本数字化助手。请对这个PDF文档进行OCR识别，提取出每一页的完整文字内容。
+如果是理科课本，请保留公式和图表描述。
+请尽可能保持原文的排版格式（如换行、段落、列表等），确保文字和文档的排版和位置相对应。
+请以JSON数组格式返回，每个对象包含 pageNumber 和 content 字段。
+不要包含任何其他解释。`;
+
+  let resultStr = '';
+  try {
+    if (isCustomOpenAI && customModel) {
+      // Fallback for custom models that might not support PDF
+      throw new Error('当前自定义模型可能不支持直接处理PDF，请尝试关闭OCR或使用默认Gemini模型。');
+    } else if (client) {
+      const response = await client.models.generateContent({
+        model: modelName,
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  data: pdfBase64.split(',')[1] || pdfBase64,
+                  mimeType: 'application/pdf'
+                }
+              }
+            ]
+          }
+        ],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                pageNumber: { type: Type.NUMBER },
+                content: { type: Type.STRING }
+              },
+              required: ['pageNumber', 'content']
+            }
+          }
+        }
+      });
+      resultStr = response.text || '[]';
+    } else {
+      throw new Error('AI client not initialized');
+    }
+
+    if (logCallback) {
+      logCallback({
+        type: 'parse',
+        model: settings.parseModel,
+        prompt: `[Textbook PDF OCR]`,
+        response: resultStr
+      });
+    }
+  } catch (error: any) {
+    if (logCallback) {
+      logCallback({
+        type: 'parse',
+        model: settings.parseModel,
+        prompt: `[Textbook PDF OCR Error]`,
+        response: `Error: ${error.message}`
+      });
+    }
+    throw error;
+  }
+
+  // Clean up potential markdown formatting
+  if (resultStr.startsWith('```')) {
+    resultStr = resultStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+  }
+  
+  try {
+    return JSON.parse(resultStr);
+  } catch (e) {
+    console.error('Failed to parse PDF OCR result', e);
+    return [];
+  }
+}
+
+/**
+ * Process a textbook page: OCR and generate embedding
+ */
+export async function processTextbookPage(
+  base64Image: string,
+  pageNumber: number,
+  settings: Settings,
+  logCallback?: (log: any) => void
+): Promise<{ content: string; embedding: number[] }> {
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(settings.parseModel, settings);
+  
+  let content = '';
+  const prompt = `你是一个专业的课本数字化助手。请对这张课本页面进行OCR识别，提取出完整的文字内容。
+如果是理科课本，请保留公式和图表描述。
+请尽可能保持原文的排版格式（如换行、段落、列表等），确保文字和文档的排版和位置相对应。
+请直接返回提取出的文字内容，不要包含任何其他解释。`;
+
+  try {
+    if (isCustomOpenAI && customModel) {
+      content = await fetchOpenAI(customModel, prompt, base64Image);
+    } else if (client) {
+      const parts: any[] = [{ text: prompt }];
+      if (base64Image.includes('base64,')) {
+        const [header, data] = base64Image.split('base64,');
+        const mimeType = header.split(':')[1].split(';')[0];
+        parts.push({
+          inlineData: { data, mimeType }
+        });
+      } else {
+        // Fallback if no header
+        parts.push({
+          inlineData: { data: base64Image, mimeType: 'image/jpeg' }
+        });
+      }
+
+      const response = await client.models.generateContent({
+        model: modelName,
+        contents: { parts }
+      });
+      content = response.text || '';
+    } else {
+      throw new Error('AI client not initialized');
+    }
+
+    if (logCallback) {
+      logCallback({
+        type: 'parse',
+        model: settings.parseModel,
+        prompt: `[Textbook OCR Page ${pageNumber}]`,
+        response: content
+      });
+    }
+  } catch (error: any) {
+    if (logCallback) {
+      logCallback({
+        type: 'parse',
+        model: settings.parseModel,
+        prompt: `[Textbook OCR Page ${pageNumber}]`,
+        response: `Error: ${error.message}`
+      });
+    }
+    throw error;
+  }
+
+  // Generate multimodal embedding
+  const embeddingInput: any[] = [];
+  if (content && content.trim() !== '') {
+    embeddingInput.push(content);
+  }
+  
+  if (base64Image) {
+    let data = base64Image;
+    let mimeType = 'image/jpeg';
+    if (base64Image.includes('base64,')) {
+      data = base64Image.split(',')[1];
+      mimeType = base64Image.split(';')[0].split(':')[1];
+    }
+    embeddingInput.push({
+      inlineData: { data, mimeType }
+    });
+  }
+
+  const embedding = await getEmbedding(embeddingInput.length > 0 ? embeddingInput : content, settings);
+  
+  return { content, embedding };
+}
+
+/**
+ * Cosine similarity between two vectors
+ */
+function cosineSimilarity(vecA: number[], vecB: number[]): number {
+  let dotProduct = 0;
+  let mA = 0;
+  let mB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i] * vecB[i];
+    mA += vecA[i] * vecA[i];
+    mB += vecB[i] * vecB[i];
+  }
+  return dotProduct / (Math.sqrt(mA) * Math.sqrt(mB));
+}
+
+/**
+ * Search textbooks for relevant pages
+ */
+export async function searchTextbooks(
+  query: string,
+  textbooks: Textbook[],
+  settings: Settings,
+  limit: number = 3
+): Promise<{ page: TextbookPage; textbookId: string; textbookName: string; score: number }[]> {
+  const queryEmbedding = await getEmbedding(query, settings);
+  const results: { page: TextbookPage; textbookId: string; textbookName: string; score: number }[] = [];
+
+  for (const textbook of textbooks) {
+    for (const page of textbook.pages) {
+      if (page.embedding) {
+        const score = cosineSimilarity(queryEmbedding, page.embedding);
+        results.push({ page, textbookId: textbook.id, textbookName: textbook.name, score });
+      }
+    }
+  }
+
+  return results.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+/**
+ * Search memories using RAG
+ */
+export async function searchAllRAG(
+  query: string,
+  memories: Memory[],
+  textbooks: Textbook[],
+  settings: Settings,
+  limit: number = 5,
+  base64Image?: string
+): Promise<{ type: 'memory' | 'textbook'; item: any; score: number }[]> {
+  let embeddingInput: any[] = [];
+  if (query && query.trim() !== '') {
+    embeddingInput.push(query);
+  }
+  if (base64Image) {
+    let data = base64Image;
+    let mimeType = 'image/jpeg';
+    if (base64Image.includes('base64,')) {
+      data = base64Image.split(',')[1];
+      mimeType = base64Image.split(';')[0].split(':')[1];
+    }
+    embeddingInput.push({
+      inlineData: { data, mimeType }
+    });
+  }
+  
+  if (embeddingInput.length === 0) {
+    return [];
+  }
+
+  const queryEmbedding = await getEmbedding(embeddingInput, settings);
+  const results: { type: 'memory' | 'textbook'; item: any; score: number }[] = [];
+
+  for (const memory of memories) {
+    if (memory.embedding) {
+      const score = cosineSimilarity(queryEmbedding, memory.embedding);
+      results.push({ type: 'memory', item: memory, score });
+    }
+  }
+
+  for (const textbook of textbooks) {
+    for (const page of textbook.pages) {
+      if (page.embedding) {
+        const score = cosineSimilarity(queryEmbedding, page.embedding);
+        results.push({ type: 'textbook', item: { textbookId: textbook.id, textbookName: textbook.name, ...page }, score });
+      }
+    }
+  }
+
+  return results.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+/**
+ * Generate a knowledge framework for a textbook
+ */
+export async function generateTextbookFramework(
+  textbook: Textbook,
+  settings: Settings,
+  logCallback?: (log: any) => void
+): Promise<KnowledgeNode[]> {
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(settings.graphModel, settings);
+  
+  // Use the first few pages and the textbook name to generate a framework
+  const context = textbook.pages.slice(0, 10).map(p => p.content).join('\n').slice(0, 4000);
+  const prompt = `你是一个专业的教材分析专家。请根据以下课本的部分内容（前10页）和课本名称《${textbook.name}》，构建一个清晰的知识框架（树状结构）。
+科目：${textbook.subject}
+
+请以JSON格式返回，包含一个 operations 数组，其中 action 为 'add'。
+每个节点包含：
+- name: 知识点名称
+- parentId: 父节点名称 (如果是根节点则为 null)
+- order: 排序
+
+内容：
+${context}`;
+
+  let resultStr = '';
+  try {
+    if (isCustomOpenAI && customModel) {
+      resultStr = await fetchOpenAI(customModel, prompt, undefined, 'json_object');
+    } else if (client) {
+      const response = await client.models.generateContent({
+        model: modelName,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              operations: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    name: { type: Type.STRING },
+                    parentId: { type: Type.STRING, nullable: true },
+                    order: { type: Type.NUMBER }
+                  },
+                  required: ['name', 'parentId', 'order']
+                }
+              }
+            },
+            required: ['operations']
+          }
+        }
+      });
+      resultStr = response.text || '{"operations": []}';
+    }
+
+    if (logCallback) {
+      logCallback({
+        type: 'graph',
+        model: settings.graphModel,
+        prompt: `[Generate Framework for ${textbook.name}]`,
+        response: resultStr
+      });
+    }
+  } catch (error: any) {
+    if (logCallback) {
+      logCallback({
+        type: 'graph',
+        model: settings.graphModel,
+        prompt: `[Generate Framework for ${textbook.name}]`,
+        response: `Error: ${error.message}`
+      });
+    }
+    throw error;
+  }
+
+  const parsed = JSON.parse(resultStr);
+  const nodes: KnowledgeNode[] = [];
+  const nameToId: { [name: string]: string } = {};
+
+  (parsed.operations || []).forEach((op: any, index: number) => {
+    const parentId = op.parentId ? nameToId[op.parentId] : null;
+    const siblingsCount = nodes.filter(n => n.parentId === parentId).length;
+    const id = parentId ? `${parentId}.${siblingsCount + 1}` : `${nodes.filter(n => n.parentId === null).length + 1}`;
+    
+    const newNode: KnowledgeNode = {
+      id,
+      subject: textbook.subject,
+      name: op.name,
+      parentId,
+      order: op.order || index
+    };
+    nodes.push(newNode);
+    nameToId[op.name] = id;
+  });
+
+  return nodes;
+}
+
+export const searchTextbookTool: FunctionDeclaration = {
+  name: "search_textbook",
+  description: "在导入的课本中搜索相关的原文内容和图片。当用户询问课本上的具体定义、例题或需要查看课本原图时使用。",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      query: {
+        type: Type.STRING,
+        description: "搜索关键词或描述性语句"
+      }
+    },
+    required: ["query"]
+  }
+};
+
+export const searchAllRAGTool: FunctionDeclaration = {
+  name: "search_all_rag",
+  description: "使用多模态 RAG 模型搜索学生的个人记忆库（包含笔记、错题、方法论等）和导入的课本。可以根据文本描述或图片内容找到最相关的记忆点或课本内容。",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      query: {
+        type: Type.STRING,
+        description: "搜索关键词或描述内容。"
+      }
+    },
+    required: ["query"]
+  }
+};
+
+// ... (rest of the file)
+const globalAi = getGlobalAI();
+
+/**
+ * Helper to get the appropriate AI client and model name based on settings.
+ */
+export function getAIClient(modelId: string, settings: Settings) {
+  // Check custom providers first (format: providerId:modelId)
+  if (modelId.includes(':')) {
+    const [providerId, actualModelId] = modelId.split(':');
+    const provider = settings.customProviders?.find(p => p.id === providerId);
+    if (provider) {
+      const customModel: CustomModel = {
+        id: modelId,
+        name: actualModelId,
+        provider: provider.type,
+        apiKey: provider.apiKey,
+        baseUrl: provider.baseUrl,
+        modelId: actualModelId
+      };
+      if (provider.type === 'gemini') {
+        const customAi = new GoogleGenAI({ apiKey: provider.apiKey });
+        return {
+          ai: customAi,
+          modelName: actualModelId,
+          isCustomOpenAI: false,
+          customModel
+        };
+      } else {
+        return {
+          ai: null,
+          modelName: actualModelId,
+          isCustomOpenAI: true,
+          customModel
+        };
+      }
+    }
+  }
+
+  // Legacy customModels
+  const customModel = settings.customModels?.find(m => m.id === modelId);
+  
+  if (customModel) {
+    if (customModel.provider === 'gemini') {
+      const customAi = new GoogleGenAI({ apiKey: customModel.apiKey });
+      return { 
+        ai: customAi, 
+        modelName: customModel.modelId, 
+        isCustomOpenAI: false,
+        customModel 
+      };
+    } else {
+      // OpenAI compatible
+      return { 
+        ai: null, 
+        modelName: customModel.modelId, 
+        isCustomOpenAI: true, 
+        customModel 
+      };
+    }
+  }
+
+  // Default Gemini
+  return { 
+    ai: globalAi, 
+    modelName: modelId, 
+    isCustomOpenAI: false, 
+    customModel: null 
+  };
+}
+
+/**
+ * Fetch from OpenAI-compatible API
+ */
+async function fetchOpenAI(customModel: CustomModel, prompt: string, base64Image?: string, responseFormat?: 'json_object') {
+  const messages: any[] = [
+    {
+      role: 'user',
+      content: base64Image ? [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: base64Image } }
+      ] : prompt
+    }
+  ];
+
+  const response = await fetch(customModel.baseUrl || 'https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${customModel.apiKey}`
+    },
+    body: JSON.stringify({
+      model: customModel.modelId,
+      messages,
+      response_format: responseFormat ? { type: responseFormat } : undefined
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`OpenAI API error: ${error}`);
+  }
+
+  const data = await response.json();
+  return data.choices[0].message.content;
+}
+
+// Skills for Knowledge Graph
+const searchKnowledgeGraphTool: FunctionDeclaration = {
+  name: "search_knowledge_graph",
+  description: "在当前科目的知识图谱中搜索相关的知识点节点。返回匹配的节点列表。",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      query: { type: Type.STRING, description: "搜索关键词，如'勾股定理'、'牛顿第一定律'" }
+    },
+    required: ["query"]
+  }
+};
+
+const getNodeDetailsTool: FunctionDeclaration = {
+  name: "get_node_details",
+  description: "获取特定知识点节点的详细信息，包括其子节点和关联的记忆点数量。",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      node_id: { type: Type.STRING, description: "知识点节点的层级ID，如'1.2.1'" }
+    },
+    required: ["node_id"]
+  }
+};
 
 export async function parseNotes(
   input: string,
   subject: Subject,
-  existingNodes: KnowledgeNode[],
+  allNodes: KnowledgeNode[],
   settings: Settings,
-  base64Image?: string,
+  base64Images?: string[],
   explicitFunction?: string,
   explicitPurpose?: string,
   previousParsedItems?: any[],
-  previousAnalysis?: string
-): Promise<{ analysisProcess: string; parsedItems: any[]; newNodes: KnowledgeNode[] }> {
+  previousAnalysis?: string,
+  existingFunctionTypes: string[] = ['细碎记忆', '方法论', '关联型记忆', '系统型'],
+  existingPurposeTypes: string[] = ['内化型', '记忆型', '补充知识型', '系统型'],
+  logCallback?: (log: any) => void
+): Promise<{ analysisProcess: string; parsedItems: any[]; newNodes: KnowledgeNode[]; deletedNodeIds: string[]; identifiedSubject: string }> {
+  // Strict Subject Isolation
+  const subjectNodes = allNodes.filter(n => n.subject === subject);
+
   const prompt = `
-你是一个高考复习与错题本AI助手。请分析以下学生的作业/笔记内容（可能包含文本或图片）。
-科目：${subject}
-当前已有的知识图谱节点：
-${existingNodes.map((n) => `- ${n.name} (ID: ${n.id})`).join('\n')}
+你是一个高考复习与错题本AI助手。请分析以下学生的作业/笔记内容（可能包含文本或多张图片）。
+当前用户选择的科目：【${subject}】
+
+【重要：科目隔离】
+请严格只在【${subject}】科目的范围内进行分析。如果内容明显属于其他科目，请在 identifiedSubject 中指出，但不要将其关联到当前科目的知识节点上。
 
 用户的作业与错题解析偏好（非常重要，请严格遵循）：
 ${settings.homeworkPreferences || '无特殊偏好'}
+
+【知识图谱深度要求】：
+请尽可能详细和完整地完善知识图谱。每个知识点的考法也要录入。知识图谱的深度建议在 4-6 层。
+如果现有知识图谱不够详细，请根据题目的共性和不同点，主动建议增加更细分的子节点。
 
 ${previousParsedItems ? `
 注意：这是用户要求重新生成的请求。
@@ -36,90 +654,336 @@ ${JSON.stringify(previousParsedItems, null, 2)}
 ` : ''}
 
 请执行以下任务：
-1. 仔细观察图片中的笔迹、题号前的标记（如用户偏好中所述，例如+号、打叉等）。
-2. 根据用户的指令或标记，提取出需要记录的错题、独立的知识点或记忆卡片。
-3. 如果是错题，请尝试完成解答、整理和归纳。
-4. 提供一段分析过程（analysisProcess），向用户解释你识别到了哪些标记、笔迹，以及你是如何理解用户意图的。
+1. 仔细观察图片中的笔迹、题号前的标记。
+2. 【多图处理】：如果提供了多张图片，请注意它们可能属于同一份作业或试卷，甚至同一道题目可能因为版面问题被拆分到了两张图片中。请你具备跨图片识别和整合的能力。
+3. 【技能调用】：使用 search_knowledge_graph 工具查找当前科目下相关的知识点。不要假设你了解所有节点，请先搜索。
+4. 根据用户的指令或标记，提取出需要记录的错题、独立的知识点或记忆卡片。
+5. 提供一段分析过程（analysisProcess），向用户解释你识别到了哪些标记、笔迹，以及你是如何理解用户意图的。
+6. 识别这段内容所属的科目（identifiedSubject）。
 
 对于每一个提取出的记忆/错题，请提供：
-1. content: 记忆或错题的具体内容（如果是错题，请包含题目、你的解答和归纳）。
-2. functionType: 功能分类，必须是以下之一：'细碎记忆', '方法论', '关联型记忆', '系统型'。${explicitFunction && explicitFunction !== 'auto' ? `(用户已指定倾向于：${explicitFunction})` : ''}
-3. purposeType: 目的分类，必须是以下之一：'内化型', '记忆型', '补充知识型', '系统型'。${explicitPurpose && explicitPurpose !== 'auto' ? `(用户已指定倾向于：${explicitPurpose})` : ''}
-4. suggestedNodeName: 建议关联的知识节点名称。如果现有的节点合适，请使用现有节点的名称；如果不合适，请提供一个新的、符合该科目树状结构的节点名称。
-5. notes: 补充提示或注意点（可选）。
-6. isMistake: 布尔值，表示这是否是一道错题（根据用户标记判断）。
+1. content: 记忆或错题的具体内容。
+2. correctAnswer: 标准答案。
+3. questionType: 题型。
+4. suggestedNodeIds: 建议关联的知识节点ID数组。请优先使用 search_knowledge_graph 找到的现有节点ID（如 "1.2.1"）。
+5. newNodes: 如果现有节点不够详细，请建议创建的新节点。
+   - name: 节点名称
+   - parentId: 父节点ID
+   - testingMethods: 该知识点的常见考法（数组，字符串列表）
+6. deletedNodeIds: 如果你发现现有节点存在冗余、错误或需要合并，请建议删除的节点ID数组。
+7. isMistake: 布尔值，标识这是否是一道错题。
+8. wrongAnswer: 如果是错题，记录用户的错误答案（如果有）。
+9. errorReason: 如果是错题，分析错误原因（例如：概念混淆、计算错误、审题不清等）。
 
 输入内容/指令：
 ${input || '请分析图片中的作业和标记'}
 `;
 
-  const parts: any[] = [{ text: prompt }];
-  if (base64Image) {
-    parts.push({
-      inlineData: {
-        data: base64Image.split(',')[1], // Remove data:image/jpeg;base64,
-        mimeType: base64Image.split(';')[0].split(':')[1],
-      },
-    });
-  }
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(settings.parseModel, settings);
 
-  const response = await ai.models.generateContent({
-    model: settings.parseModel,
-    contents: { parts },
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          analysisProcess: { type: Type.STRING, description: "AI对用户笔迹、标记的识别过程和意图分析" },
-          items: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                content: { type: Type.STRING },
-                functionType: { type: Type.STRING },
-                purposeType: { type: Type.STRING },
-                suggestedNodeName: { type: Type.STRING },
-                notes: { type: Type.STRING },
-                isMistake: { type: Type.BOOLEAN },
-              },
-              required: ['content', 'functionType', 'purposeType', 'suggestedNodeName', 'isMistake'],
+  let response: any;
+  let text = '';
+  try {
+    if (isCustomOpenAI && customModel) {
+      const jsonPrompt = prompt + "\n\n请以 JSON 格式返回结果，包含 analysisProcess, identifiedSubject, items (数组，包含 content, correctAnswer, questionType, suggestedNodeIds, newNodes, deletedNodeIds)。";
+      text = await fetchOpenAI(customModel, jsonPrompt, base64Images?.[0], 'json_object');
+      response = { text };
+    } else if (client) {
+      const parts: any[] = [{ text: prompt }];
+      if (base64Images && base64Images.length > 0) {
+        base64Images.forEach(img => {
+          parts.push({
+            inlineData: {
+              data: img.split(',')[1],
+              mimeType: img.split(';')[0].split(':')[1],
             },
-          }
-        },
-        required: ['analysisProcess', 'items']
-      },
-    },
-  });
-
-  const resultStr = response.text || '{"analysisProcess": "", "items": []}';
-  const parsed = JSON.parse(resultStr);
-
-  const newNodes: KnowledgeNode[] = [];
-
-  for (const item of parsed.items || []) {
-    let nodeId = existingNodes.find((n) => n.name === item.suggestedNodeName)?.id;
-    
-    if (!nodeId) {
-      let newlyCreated = newNodes.find((n) => n.name === item.suggestedNodeName);
-      if (newlyCreated) {
-        nodeId = newlyCreated.id;
-      } else {
-        const rootNode = existingNodes.find((n) => n.subject === subject && n.parentId === null);
-        nodeId = uuidv4();
-        newNodes.push({
-          id: nodeId,
-          subject: subject,
-          name: item.suggestedNodeName,
-          parentId: rootNode ? rootNode.id : null,
+          });
         });
       }
+
+      response = await client.models.generateContent({
+        model: modelName,
+        contents: { parts },
+        config: {
+          tools: [{ functionDeclarations: [searchKnowledgeGraphTool, getNodeDetailsTool] }],
+          toolConfig: { includeServerSideToolInvocations: true },
+          responseMimeType: 'application/json',
+        }
+      });
+
+      // Handle Function Calls
+      let functionCalls = response.functionCalls;
+      while (functionCalls) {
+        const toolResponses: any[] = [];
+        for (const fc of functionCalls) {
+          if (fc.name === 'search_knowledge_graph') {
+            const query = (fc.args as any).query.toLowerCase();
+            const matches = subjectNodes.filter(n => n.name.toLowerCase().includes(query));
+            toolResponses.push({
+              name: fc.name,
+              id: fc.id,
+              response: { nodes: matches.map(n => ({ id: n.id, name: n.name, parentId: n.parentId })) }
+            });
+          } else if (fc.name === 'get_node_details') {
+            const nodeId = (fc.args as any).node_id;
+            const node = subjectNodes.find(n => n.id === nodeId);
+            const children = subjectNodes.filter(n => n.parentId === nodeId);
+            toolResponses.push({
+              name: fc.name,
+              id: fc.id,
+              response: { node, children: children.map(c => ({ id: c.id, name: c.name })) }
+            });
+          }
+        }
+
+        // Send tool responses back
+        const previousContent = response.candidates?.[0]?.content;
+        response = await client.models.generateContent({
+          model: modelName,
+          contents: [
+            { role: 'user', parts: parts },
+            previousContent as any,
+            { role: 'user', parts: toolResponses.map(tr => ({ functionResponse: tr })) }
+          ],
+          config: {
+            tools: [{ functionDeclarations: [searchKnowledgeGraphTool, getNodeDetailsTool] }],
+            toolConfig: { includeServerSideToolInvocations: true },
+            responseMimeType: 'application/json',
+          }
+        });
+        functionCalls = response.functionCalls;
+      }
+      text = response.text || '{}';
+    } else {
+      throw new Error('AI client not initialized');
     }
-    item.nodeId = nodeId;
+
+    if (logCallback) {
+      logCallback({
+        type: 'parse',
+        model: settings.parseModel,
+        prompt: prompt,
+        response: text
+      });
+    }
+  } catch (error: any) {
+    if (logCallback) {
+      logCallback({
+        type: 'parse',
+        model: settings.parseModel,
+        prompt: prompt,
+        response: `Error: ${error.message}`
+      });
+    }
+    throw error;
   }
 
-  return { analysisProcess: parsed.analysisProcess || '', parsedItems: parsed.items || [], newNodes };
+  let result: any = { items: [], analysisProcess: '', identifiedSubject: subject };
+  try {
+    result = JSON.parse(text);
+  } catch (e) {
+    console.error("Failed to parse AI response as JSON:", e, text);
+    result = { items: [], analysisProcess: '解析AI响应失败', identifiedSubject: subject };
+  }
+  
+  // Process new nodes to assign hierarchical IDs
+  const finalNewNodes: KnowledgeNode[] = [];
+  const finalDeletedNodeIds: string[] = result.deletedNodeIds || [];
+
+  const items = result.items || [];
+  const processedItems = items.map((item: any) => {
+    const nodeIds = [...(item.suggestedNodeIds || [])];
+    
+    if (item.newNodes) {
+      item.newNodes.forEach((nn: any) => {
+        // Check if node with same name exists in subject
+        const existing = subjectNodes.find(sn => sn.name === nn.name && sn.parentId === nn.parentId);
+        if (existing) {
+          nodeIds.push(existing.id);
+        } else {
+          // Create new node with hierarchical ID
+          const parentId = nn.parentId || null;
+          const siblings = [...subjectNodes, ...finalNewNodes].filter(n => n.parentId === parentId);
+          
+          // Find the next order number
+          let nextOrder = 1;
+          if (siblings.length > 0) {
+            const lastOrder = Math.max(...siblings.map(s => s.order || 0));
+            nextOrder = lastOrder + 1;
+          }
+          
+          const newId = parentId ? `${parentId}.${nextOrder}` : `${nextOrder}`;
+          
+          const newNode: KnowledgeNode = {
+            id: newId,
+            subject,
+            name: nn.name,
+            parentId,
+            order: nextOrder,
+            testingMethods: nn.testingMethods || []
+          };
+          finalNewNodes.push(newNode);
+          nodeIds.push(newId);
+        }
+      });
+    }
+    
+    return { ...item, nodeIds };
+  });
+
+  return {
+    analysisProcess: result.analysisProcess || '解析完成',
+    parsedItems: processedItems,
+    newNodes: finalNewNodes,
+    deletedNodeIds: finalDeletedNodeIds,
+    identifiedSubject: result.identifiedSubject || subject
+  };
+}
+
+export async function summarizeStudentProfile(
+  settings: Settings,
+  memories: Memory[],
+  logs: any[]
+): Promise<string> {
+  const recentMemories = memories.slice(-100); // Look at last 100 memories
+  const recentLogs = logs.filter(l => l.type === 'chat' || l.type === 'parse' || l.type === 'review').slice(-50);
+
+  // Group data for better analysis
+  const memorySummary = recentMemories.filter(m => !m.isMistake).map(m => 
+    `[${m.subject}] ${m.content.substring(0, 100)}... (Mastery: ${m.mastery}%)`
+  ).join('\n');
+  
+  const mistakeSummary = recentMemories.filter(m => m.isMistake).map(m => 
+    `[${m.subject}] ${m.content.substring(0, 100)}... (Reason: ${m.errorReason})`
+  ).join('\n');
+
+  const prompt = `
+作为专属AI导师，请根据学生最近的学习记录和交互日志，进行深度分析，更新对该学生的详细画像（Student Profile）。
+
+【最新学习数据】：
+记忆点：
+${memorySummary || '暂无新记忆点'}
+
+错题样本：
+${mistakeSummary || '暂无新错题'}
+
+交互日志样本：
+${recentLogs.map(l => `- [${l.type}] User: ${l.prompt.substring(0, 50)}...\n- AI: ${l.response.substring(0, 50)}...`).join('\n')}
+
+【画像要求】：
+请务必按照以下维度进行极其详细的划分，并确保包含“科目维度”和“时间维度”的深度分析：
+
+1. **总体学习状态与心理曲线**：当前的整体复习进度、学习动力、压力水平及心理状态随时间的变化趋势。
+2. **科目深度解剖**：
+   - 针对每个主要科目，分析其知识图谱的覆盖率、核心考点的掌握程度。
+   - 识别优势模块与顽固薄弱环节。
+   - 识别学生在不同科目上的思维模型差异。
+3. **时间维度与效率分析**：
+   - **黄金时间识别**：分析学生在不同时间段的学习产出质量。
+   - **疲劳周期**：识别学习效率下降的临界点。
+   - **活跃度规律**：学生在什么时间最倾向于提问，什么时间最倾向于整理错题。
+4. **学习行为指纹**：
+   - **资料吸收偏好**：对图表、公式、长文本或多媒体资料的敏感度。
+   - **交互风格**：是“结果导向型”还是“过程导向型”。
+5. **核心痛点与精准提分路径**：
+   - 总结当前最急需解决的 3-5 个核心痛点。
+   - 提供基于数据分析的、可量化的后续复习建议。
+
+现有的学生画像：
+${settings.studentProfile || '暂无'}
+
+请输出一段详细、结构化、具有深度的学生画像总结，字数控制在1000字以内。直接输出总结内容，使用 Markdown 格式，不要包含多余的客套话。
+`;
+
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(settings.chatModel, settings);
+
+  if (isCustomOpenAI && customModel) {
+    return await fetchOpenAI(customModel, prompt);
+  } else if (client) {
+    const response = await client.models.generateContent({
+      model: modelName,
+      contents: prompt,
+    });
+    return response.text || settings.studentProfile || '';
+  }
+  return settings.studentProfile || '';
+}
+
+export async function reorganizeKnowledgeGraph(
+  settings: Settings,
+  subject: Subject,
+  nodes: KnowledgeNode[]
+): Promise<any[]> {
+  const prompt = `
+你是一个知识图谱专家。请分析以下【${subject}】科目的知识节点，并重新组织它们的层级结构，使其更加合理、详细和准确。
+你可以：
+1. 将孤立的节点归类到合适的父节点下。
+2. 发现缺失的关键概念，并添加新节点。
+3. 修正不合理的父子关系。
+
+当前节点列表：
+${nodes.map(n => `- ID: ${n.id}, Name: ${n.name}, ParentID: ${n.parentId || 'null'}`).join('\n')}
+
+请返回一个 JSON 数组，包含需要执行的操作（GraphOperation）。
+操作类型 (action) 包括: 'add', 'update', 'delete', 'move'。
+- add: { action: 'add', node: { id: 'new-uuid', name: '新节点名', parentId: '父节点ID' } }
+- update: { action: 'update', node: { id: '现有ID', name: '新名字' } }
+- move: { action: 'move', node: { id: '现有ID', parentId: '新父节点ID' } }
+- delete: { action: 'delete', nodeId: '现有ID' }
+
+重要提示：
+- id 和 nodeId 必须是现有节点的 ID (UUID)。
+- 对于新添加的节点，parentId 可以是现有节点的 ID，或者是你在此次操作中新添加节点的临时占位符。
+- 严禁将节点名称作为现有节点的 ID 使用。
+
+注意：
+- 必须保持一个根节点（parentId 为 null）。
+- 确保没有循环引用。
+- 尽量细化知识结构，让图谱更有层次感。
+`;
+
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(settings.graphModel, settings);
+
+  let resultText = '';
+  if (isCustomOpenAI && customModel) {
+    resultText = await fetchOpenAI(customModel, prompt, undefined, 'json_object');
+  } else if (client) {
+    const response = await client.models.generateContent({
+      model: modelName,
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              action: { type: Type.STRING, enum: ['add', 'update', 'delete', 'move'] },
+              node: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING },
+                  name: { type: Type.STRING },
+                  parentId: { type: Type.STRING }
+                }
+              },
+              nodeId: { type: Type.STRING }
+            },
+            required: ['action']
+          }
+        }
+      }
+    });
+    resultText = response.text || '';
+  }
+
+  if (!resultText) return [];
+  try {
+    return JSON.parse(resultText) as any[];
+  } catch (e) {
+    console.error('Failed to parse graph reorganization operations', e);
+    return [];
+  }
 }
 
 export async function chatWithAI(
@@ -127,11 +991,23 @@ export async function chatWithAI(
   subject: Subject,
   relevantMemories: Memory[],
   allNodes: KnowledgeNode[],
-  settings: Settings
+  settings: Settings,
+  textbooks?: Textbook[],
+  base64Image?: string,
+  logCallback?: (log: any) => void,
+  allMemories: Memory[] = []
 ): Promise<string> {
   const memoryContext = relevantMemories.map(m => {
     const nodes = m.knowledgeNodeIds.map(id => allNodes.find(n => n.id === id)?.name).filter(Boolean).join(', ');
-    return `[记忆点] ${m.content} (分类: ${m.functionType}, 关联节点: ${nodes}) ${m.notes ? `\n注意: ${m.notes}` : ''}`;
+    let contextStr = `[记忆点] ${m.content} (分类: ${m.functionType}, 关联节点: ${nodes})`;
+    if (m.isMistake) {
+      contextStr += `\n[错题标记] 是`;
+      if (m.wrongAnswer) contextStr += `\n[原错误答案] ${m.wrongAnswer}`;
+      if (m.errorReason) contextStr += `\n[错因分析] ${m.errorReason}`;
+    }
+    if (m.visualDescription) contextStr += `\n[图片视觉描述] ${m.visualDescription}`;
+    if (m.notes) contextStr += `\n[补充说明] ${m.notes}`;
+    return contextStr;
   }).join('\n\n');
 
   const prompt = `
@@ -145,14 +1021,155 @@ ${query}
 ${memoryContext || '暂无相关记忆。'}
 
 请结合学生的记忆点，给出专业、易懂、切中要害的解答。如果学生的记忆点中有错误或薄弱的地方，请重点指出并帮助其巩固。
+你可以使用 search_textbook 工具来查找课本上的原文定义、例题或查看课本原图。
+如果你引用了课本内容并想展示课本原图，请在回答中包含以下格式：[TEXTBOOK_PAGE: <textbookId>:<pageNumber>]，其中 <textbookId> 和 <pageNumber> 是工具返回的信息。
 `;
 
-  const response = await ai.models.generateContent({
-    model: settings.chatModel,
-    contents: prompt,
-  });
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(settings.chatModel, settings);
 
-  return response.text || '抱歉，我无法回答这个问题。';
+  const tools = [{ 
+    functionDeclarations: [
+      searchKnowledgeGraphTool, 
+      getNodeDetailsTool, 
+      searchTextbookTool,
+      searchAllRAGTool
+    ] 
+  }];
+
+  let result = '';
+  try {
+    if (isCustomOpenAI && customModel) {
+      result = await fetchOpenAI(customModel, prompt, base64Image);
+    } else if (client) {
+      const parts: any[] = [{ text: prompt }];
+      if (base64Image) {
+        parts.push({
+          inlineData: {
+            data: base64Image.split(',')[1],
+            mimeType: base64Image.split(';')[0].split(':')[1],
+          },
+        });
+      }
+
+      let response = await client.models.generateContent({
+        model: modelName,
+        contents: { parts },
+        config: {
+          tools,
+          toolConfig: { includeServerSideToolInvocations: true },
+        }
+      });
+
+      let functionCalls = response.functionCalls;
+      while (functionCalls) {
+        const toolResponses: any[] = [];
+        for (const fc of functionCalls) {
+          if (fc.name === 'search_knowledge_graph') {
+            const q = (fc.args as any).query.toLowerCase();
+            const matches = allNodes.filter(n => n.name.toLowerCase().includes(q));
+            toolResponses.push({
+              name: fc.name,
+              id: fc.id,
+              response: { nodes: matches.map(n => ({ id: n.id, name: n.name, parentId: n.parentId })) }
+            });
+          } else if (fc.name === 'get_node_details') {
+            const nodeId = (fc.args as any).node_id;
+            const node = allNodes.find(n => n.id === nodeId);
+            const children = allNodes.filter(n => n.parentId === nodeId);
+            toolResponses.push({
+              name: fc.name,
+              id: fc.id,
+              response: { node, children: children.map(c => ({ id: c.id, name: c.name })) }
+            });
+          } else if (fc.name === 'search_textbook') {
+            const q = (fc.args as any).query;
+            const results = await searchTextbooks(q, textbooks || [], settings);
+            toolResponses.push({
+              name: fc.name,
+              id: fc.id,
+              response: { 
+                results: results.map(r => ({
+                  textbookId: r.textbookId,
+                  textbookName: r.textbookName,
+                  pageNumber: r.page.pageNumber,
+                  content: r.page.content
+                }))
+              }
+            });
+          } else if (fc.name === 'search_all_rag') {
+            const q = (fc.args as any).query;
+            const results = await searchAllRAG(q, allMemories, textbooks || [], settings, 5, base64Image);
+            toolResponses.push({
+              name: fc.name,
+              id: fc.id,
+              response: { 
+                results: results.map(r => {
+                  if (r.type === 'memory') {
+                    return {
+                      type: 'memory',
+                      id: r.item.id,
+                      content: r.item.content,
+                      functionType: r.item.functionType,
+                      notes: r.item.notes,
+                      isMistake: r.item.isMistake
+                    };
+                  } else {
+                    return {
+                      type: 'textbook',
+                      textbookId: r.item.textbookId,
+                      textbookName: r.item.textbookName,
+                      pageNumber: r.item.pageNumber,
+                      content: r.item.content
+                    };
+                  }
+                })
+              }
+            });
+          }
+        }
+
+        const previousContent = response.candidates?.[0]?.content;
+        response = await client.models.generateContent({
+          model: modelName,
+          contents: [
+            { role: 'user', parts: parts },
+            previousContent as any,
+            { role: 'user', parts: toolResponses.map(tr => ({ functionResponse: tr })) }
+          ],
+          config: {
+            tools,
+            toolConfig: { includeServerSideToolInvocations: true },
+          }
+        });
+        functionCalls = response.functionCalls;
+      }
+
+      result = response.text || '抱歉，我无法回答这个问题。';
+    } else {
+      throw new Error('AI client not initialized');
+    }
+
+    if (logCallback) {
+      logCallback({
+        type: 'chat',
+        model: settings.chatModel,
+        prompt,
+        response: result
+      });
+    }
+  } catch (error: any) {
+    if (logCallback) {
+      logCallback({
+        type: 'chat',
+        model: settings.chatModel,
+        prompt,
+        response: `Error: ${error.message}`
+      });
+    }
+    throw error;
+  }
+
+  return result;
 }
 
 export type GraphOperation = 
@@ -161,61 +1178,138 @@ export type GraphOperation =
   | { action: 'rename'; nodeId: string; name: string }
   | { action: 'move'; nodeId: string; parentId: string | null };
 
+export interface GraphAdjustmentResult {
+  reasoning: string;
+  operations: GraphOperation[];
+}
+
 export async function adjustKnowledgeGraph(
   command: string,
   subject: Subject,
   existingNodes: KnowledgeNode[],
-  settings: Settings
-): Promise<GraphOperation[]> {
+  settings: Settings,
+  base64Image?: string,
+  logCallback?: (log: any) => void
+): Promise<GraphAdjustmentResult> {
   const prompt = `
 你是一个知识图谱管理AI。用户想要修改【${subject}】的知识图谱。
-当前图谱节点列表（JSON格式）：
+当前图谱节点列表（仅包含必要信息）：
 ${JSON.stringify(existingNodes.map(n => ({ id: n.id, name: n.name, parentId: n.parentId })), null, 2)}
 
 用户的指令：
 "${command}"
 
-请分析用户的指令，并返回一个操作列表来修改图谱。支持的操作(action)有：
-- 'add': 添加新节点 (需要提供 name 和 parentId)
-- 'delete': 删除节点 (需要提供 nodeId)
-- 'rename': 重命名节点 (需要提供 nodeId 和 name)
-- 'move': 移动节点 (需要提供 nodeId 和 parentId)
+任务：
+1. 分析用户的指令。如果提供了结构图，请优先参考图中的层级关系。
+2. 返回一个操作列表来修改图谱。支持的操作(action)有：
+   - 'add': 添加新节点 (需要提供 name 和 parentId)
+   - 'delete': 删除节点 (需要提供 nodeId)
+   - 'rename': 重命名节点 (需要提供 nodeId 和 name)
+   - 'move': 移动节点 (需要提供 nodeId 和 parentId)
 
-注意：如果用户说“在X下添加Y”，你需要找到X的ID作为parentId。如果找不到合适的父节点，parentId可以是null（根节点）。
+重要提示：
+- nodeId 必须是现有节点的 ID (UUID)。
+- parentId 必须是现有节点的 ID，或者是你在此次操作中新添加节点的临时占位符（建议使用节点名称作为临时占位符）。
+- 严禁将节点名称作为 nodeId 使用。
+
+注意：
+- parentId 必须是现有节点的 ID，或者是你在此次操作中新添加节点的临时占位符。
+- 如果是根节点，parentId 为 null。
+- 保持图谱逻辑严密，避免冗余。
+- 在 reasoning 字段中简要说明你的修改逻辑。
 `;
 
-  const response = await ai.models.generateContent({
-    model: settings.graphModel,
-    contents: prompt,
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            action: { type: Type.STRING },
-            nodeId: { type: Type.STRING },
-            name: { type: Type.STRING },
-            parentId: { type: Type.STRING },
-          },
-          required: ['action'],
-        },
-      },
-    },
-  });
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(settings.graphModel, settings);
 
-  const resultStr = response.text || '[]';
-  const parsed = JSON.parse(resultStr);
-  
-  // Clean up parsed operations
-  return parsed.map((op: any) => {
-    if (op.parentId === 'null' || op.parentId === undefined) op.parentId = null;
+  let resultStr = '';
+  try {
+    if (isCustomOpenAI && customModel) {
+      resultStr = await fetchOpenAI(customModel, prompt, base64Image, 'json_object');
+    } else if (client) {
+      const parts: any[] = [{ text: prompt }];
+      if (base64Image) {
+        parts.push({
+          inlineData: {
+            data: base64Image.split(',')[1],
+            mimeType: base64Image.split(';')[0].split(':')[1],
+          },
+        });
+      }
+
+      const response = await client.models.generateContent({
+        model: modelName,
+        contents: { parts },
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              reasoning: { type: Type.STRING, description: "AI的调整逻辑说明" },
+              operations: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    action: { type: Type.STRING, description: "add, delete, rename, move" },
+                    nodeId: { type: Type.STRING, description: "现有节点的ID (用于delete, rename, move)" },
+                    name: { type: Type.STRING, description: "节点名称 (用于add, rename)" },
+                    parentId: { type: Type.STRING, description: "父节点ID (用于add, move)，根节点设为 null" },
+                  },
+                  required: ['action'],
+                },
+              }
+            },
+            required: ['reasoning', 'operations']
+          },
+        },
+      });
+      resultStr = response.text || '{"reasoning": "", "operations": []}';
+    } else {
+      throw new Error('AI client not initialized');
+    }
+
+    if (logCallback) {
+      logCallback({
+        type: 'graph',
+        model: settings.graphModel,
+        prompt,
+        response: resultStr
+      });
+    }
+  } catch (error: any) {
+    if (logCallback) {
+      logCallback({
+        type: 'graph',
+        model: settings.graphModel,
+        prompt,
+        response: `Error: ${error.message}`
+      });
+    }
+    throw error;
+  }
+
+  // Clean up potential markdown formatting
+
+  let parsed;
+  try {
+    parsed = JSON.parse(resultStr);
+  } catch (e) {
+    console.error("Failed to parse JSON:", e, resultStr);
+    parsed = { reasoning: "解析AI响应失败", operations: [] };
+  }
+  const operations = (parsed.operations || []).map((op: any) => {
+    if (op.parentId === 'null' || op.parentId === undefined || op.parentId === "") op.parentId = null;
     return op as GraphOperation;
   });
+  
+  return {
+    reasoning: parsed.reasoning || '',
+    operations
+  };
 }
 
 export type QuizQuestion = {
+  memoryIds: string[]; // Changed from memoryId to memoryIds to support joint questions
   type: 'qa' | 'tf' | 'mc';
   question: string;
   options?: string[]; // For multiple choice
@@ -223,48 +1317,374 @@ export type QuizQuestion = {
   explanation: string;
 };
 
-export async function generateQuiz(
-  memory: Memory,
-  settings: Settings
-): Promise<QuizQuestion> {
+export async function reorganizeMemories(
+  settings: Settings,
+  subject: Subject,
+  memories: Memory[]
+): Promise<any[]> {
   const prompt = `
-你是一个高考复习AI老师。请根据以下学生的记忆点/错题，生成一道简单的复习考察题，帮助学生巩固记忆。
-记忆点内容：
-${memory.content}
-${memory.notes ? `补充笔记：${memory.notes}` : ''}
+你是一个知识管理专家。请分析以下【${subject}】科目的个人记忆点（包含笔记、错题等），并建议如何重新组织它们。
+你可以建议：
+1. 合并内容重复或高度相关的记忆点。
+2. 将一个复杂的记忆点拆分为多个更简单的记忆点。
+3. 修正错误的分类（functionType 或 purposeType）。
+4. 补充缺失的笔记或关联知识点。
 
-请生成一道题目，题型可以是：
+当前记忆点列表：
+${memories.map(m => `- ID: ${m.id}, Content: ${m.content.substring(0, 100)}, Function: ${m.functionType}, Purpose: ${m.purposeType}`).join('\n')}
+
+请返回一个 JSON 数组，包含需要执行的操作。
+操作类型 (action) 包括: 'merge', 'split', 'update', 'delete'。
+- merge: { action: 'merge', memoryIds: ['id1', 'id2'], newMemory: { content: '...', functionType: '...', purposeType: '...', notes: '...' } }
+- split: { action: 'split', memoryId: 'id1', newMemories: [{ content: '...', ... }, { content: '...', ... }] }
+- update: { action: 'update', memoryId: 'id1', updates: { content: '...', functionType: '...', ... } }
+- delete: { action: 'delete', memoryId: 'id1' }
+
+注意：请务必保持严谨，只在确实有必要时才建议修改。
+`;
+
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(settings.chatModel, settings);
+
+  let resultText = '';
+  if (isCustomOpenAI && customModel) {
+    resultText = await fetchOpenAI(customModel, prompt, undefined, 'json_object');
+  } else if (client) {
+    const response = await client.models.generateContent({
+      model: modelName,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+      }
+    });
+    resultText = response.text || '';
+  }
+
+  if (!resultText) return [];
+  try {
+    const parsed = JSON.parse(resultText);
+    return Array.isArray(parsed) ? parsed : (parsed.operations || []);
+  } catch (e) {
+    console.error('Failed to parse memory reorganization operations', e);
+    return [];
+  }
+}
+
+export async function calculateNodeCorrelation(
+  nodes: KnowledgeNode[],
+  memories: Memory[]
+): Promise<KnowledgeNode[]> {
+  const updatedNodes = [...nodes];
+  
+  for (let i = 0; i < updatedNodes.length; i++) {
+    const nodeA = updatedNodes[i];
+    const correlations: { [targetId: string]: number } = {};
+    
+    for (let j = 0; j < updatedNodes.length; j++) {
+      if (i === j) continue;
+      const nodeB = updatedNodes[j];
+      
+      let score = 0;
+      
+      // 1. Shared memories (Strongest signal)
+      const memoriesA = memories.filter(m => m.knowledgeNodeIds?.includes(nodeA.id));
+      const memoriesB = memories.filter(m => m.knowledgeNodeIds?.includes(nodeB.id));
+      const sharedMemories = memoriesA.filter(ma => memoriesB.some(mb => mb.id === ma.id));
+      
+      if (sharedMemories.length > 0) {
+        score += Math.min(0.6, sharedMemories.length * 0.15);
+      }
+      
+      // 2. Structural relationship
+      if (nodeA.parentId === nodeB.parentId && nodeA.parentId !== null) {
+        score += 0.25; // Siblings
+      } else if (nodeA.parentId === nodeB.id || nodeB.parentId === nodeA.id) {
+        score += 0.35; // Parent-child
+      }
+
+      // 3. Subject similarity
+      if (nodeA.subject === nodeB.subject) {
+        score += 0.05;
+      }
+      
+      if (score > 0.1) {
+        correlations[nodeB.id] = Math.min(1, score);
+      }
+    }
+    
+    updatedNodes[i] = { ...nodeA, correlation: correlations };
+  }
+  
+  return updatedNodes;
+}
+
+export async function generateQuizzes(
+  memories: Memory[],
+  nodes: KnowledgeNode[],
+  settings: Settings,
+  isJoint: boolean = false,
+  logCallback?: (log: any) => void
+): Promise<QuizQuestion[]> {
+  // If joint, filter memories that have correlated nodes
+  let memoriesToUse = memories;
+  if (isJoint && memories.length > 1) {
+    // Find memories that share highly correlated nodes
+    const nodeIds = Array.from(new Set(memories.flatMap(m => m.knowledgeNodeIds)));
+    const correlatedPairs: [string, string][] = [];
+    
+    for (const idA of nodeIds) {
+      const nodeA = nodes.find(n => n.id === idA);
+      if (nodeA?.correlation) {
+        for (const [idB, score] of Object.entries(nodeA.correlation)) {
+          if (score > 0.6 && nodeIds.includes(idB)) {
+            correlatedPairs.push([idA, idB]);
+          }
+        }
+      }
+    }
+    
+    if (correlatedPairs.length > 0) {
+      // Just pick the first pair for now to keep it simple
+      const [idA, idB] = correlatedPairs[0];
+      memoriesToUse = memories.filter(m => m.knowledgeNodeIds.includes(idA) || m.knowledgeNodeIds.includes(idB));
+    } else {
+      // If no strong correlations, maybe just use the first 3
+      memoriesToUse = memories.slice(0, 3);
+    }
+  }
+
+  const prompt = `
+你是一个高考复习AI老师。请根据以下学生的记忆点/错题，生成复习考察题，帮助学生巩固记忆。
+
+学生画像：
+${settings.studentProfile || '无特殊画像'}
+
+题目难度要求：
+难度范围在 ${settings.minReviewDifficulty} 到 ${settings.maxReviewDifficulty} 之间（0为最简单，10为最难）。
+
+需要复习的记忆点列表：
+${memoriesToUse.map((m, i) => {
+  let memoryStr = `[记忆点 ${i + 1}] (ID: ${m.id})\n内容：${m.content}`;
+  if (m.isMistake) {
+    memoryStr += `\n[错题标记] 是`;
+    if (m.wrongAnswer) memoryStr += `\n[原错误答案] ${m.wrongAnswer}`;
+    if (m.errorReason) memoryStr += `\n[错因分析] ${m.errorReason}`;
+  }
+  if (m.notes) memoryStr += `\n补充笔记：${m.notes}`;
+  return memoryStr;
+}).join('\n\n')}
+
+${isJoint ? `
+【特别要求：联合命题】
+请将上述所有记忆点结合起来，生成 1-2 道具有综合性的题目。这些题目应该考察这些知识点之间的联系、区别或综合应用。
+` : `
+请为每个记忆点生成一道题目。
+`}
+
+题型可以是：
 1. 'qa' (简答题/问答题)
 2. 'tf' (判断题，答案必须是"对"或"错")
 3. 'mc' (单选题，提供4个选项)
 
-请随机选择一种题型，并以JSON格式返回。
+【重要格式要求】：
+- 对于 'mc' (单选题)，请务必将4个选项放在 \`options\` 数组中，**不要**将选项写在 \`question\` 字符串里。
+- 对于 'qa' (简答题)，请务必在 \`correctAnswer\` 字段中提供详细的参考答案，在 \`explanation\` 中提供解析。不要让 \`correctAnswer\` 为空。
+
+请以JSON数组格式返回，每个对象包含 memoryIds (关联的记忆点ID数组) 和题目信息。
 `;
 
-  const response = await ai.models.generateContent({
-    model: settings.chatModel,
-    contents: prompt,
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          type: { type: Type.STRING, description: "qa, tf, or mc" },
-          question: { type: Type.STRING },
-          options: { 
-            type: Type.ARRAY, 
-            items: { type: Type.STRING },
-            description: "Only for mc type"
-          },
-          correctAnswer: { type: Type.STRING, description: "The correct answer. For tf, use '对' or '错'" },
-          explanation: { type: Type.STRING, description: "Explanation of the answer" }
-        },
-        required: ['type', 'question', 'correctAnswer', 'explanation']
-      }
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(settings.reviewModel || settings.chatModel, settings);
+
+  let resultStr = '';
+  try {
+    if (isCustomOpenAI && customModel) {
+      resultStr = await fetchOpenAI(customModel, prompt, undefined, 'json_object');
+    } else if (client) {
+      const response = await client.models.generateContent({
+        model: modelName,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                memoryIds: { 
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                  description: "关联的记忆点ID数组"
+                },
+                type: { type: Type.STRING, description: "qa, tf, or mc" },
+                question: { type: Type.STRING },
+                options: { 
+                  type: Type.ARRAY, 
+                  items: { type: Type.STRING },
+                  description: "Only for mc type"
+                },
+                correctAnswer: { type: Type.STRING, description: "The correct answer. For tf, use '对' or '错'" },
+                explanation: { type: Type.STRING, description: "Explanation of the answer" }
+              },
+              required: ['memoryIds', 'type', 'question', 'correctAnswer', 'explanation']
+            }
+          }
+        }
+      });
+      resultStr = response.text || '[]';
+    } else {
+      throw new Error('AI client not initialized');
     }
+
+    if (logCallback) {
+      logCallback({
+        type: 'review',
+        model: settings.reviewModel || settings.chatModel,
+        prompt,
+        response: resultStr
+      });
+    }
+  } catch (error: any) {
+    if (logCallback) {
+      logCallback({
+        type: 'review',
+        model: settings.reviewModel || settings.chatModel,
+        prompt,
+        response: `Error: ${error.message}`
+      });
+    }
+    throw error;
+  }
+
+  // Clean up potential markdown formatting
+  if (resultStr.startsWith('```')) {
+    resultStr = resultStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+  }
+
+  if (!resultStr) {
+    resultStr = '[]';
+  }
+
+  return JSON.parse(resultStr) as QuizQuestion[];
+}
+
+/**
+ * Generate a detailed review plan based on mistakes and knowledge graph
+ */
+export async function generateReviewPlan(
+  subject: Subject,
+  memories: Memory[],
+  nodes: KnowledgeNode[],
+  settings: Settings,
+  logCallback?: (log: any) => void
+): Promise<ReviewPlan> {
+  const mistakes = memories.filter(m => m.subject === subject && m.isMistake);
+  const subjectNodes = nodes.filter(n => n.subject === subject);
+  
+  // Identify weak nodes based on mastery
+  const weakNodes = subjectNodes.filter(n => {
+    const nodeMemories = memories.filter(m => m.knowledgeNodeIds.includes(n.id));
+    if (nodeMemories.length === 0) return false;
+    const avgMastery = nodeMemories.reduce((acc, m) => acc + (m.mastery || 0), 0) / nodeMemories.length;
+    return avgMastery < 50;
   });
 
-  const resultStr = response.text || '{}';
-  return JSON.parse(resultStr) as QuizQuestion;
+  const prompt = `
+你是一个专业的高考提分专家。请根据学生的错题记录、知识点掌握情况和学习背景，制定一份详细的、可执行的复习计划。
+
+科目：${subject}
+学生背景：${settings.studentProfile || '无'}
+错题数量：${mistakes.length}
+薄弱知识点：${weakNodes.map(n => n.name).join(', ')}
+
+【错题摘要】：
+${mistakes.slice(0, 15).map(m => `- ${m.content.slice(0, 60)}... (错因: ${m.errorReason || '未分析'})`).join('\n')}
+
+请执行以下任务：
+1. 分析学生的错误趋势和核心薄弱环节。
+2. 制定一个包含 5-8 个具体任务的复习计划。
+3. 每个任务应包含：标题、具体内容、任务类型（knowledge: 知识巩固, exercise: 针对性练习, summary: 总结提升）、优先级（high, medium, low）以及关联的知识点ID。
+
+请以 JSON 格式返回，包含 analysis (字符串，Markdown格式) 和 items (数组，包含 id, title, content, type, priority, relatedNodeIds)。
+不要包含任何其他解释。
+`;
+
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(settings.reviewModel || settings.chatModel, settings);
+  
+  let resultStr = '';
+  try {
+    if (isCustomOpenAI && customModel) {
+      resultStr = await fetchOpenAI(customModel, prompt, undefined, 'json_object');
+    } else if (client) {
+      const response = await client.models.generateContent({
+        model: modelName,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              analysis: { type: Type.STRING },
+              items: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    title: { type: Type.STRING },
+                    content: { type: Type.STRING },
+                    type: { type: Type.STRING, description: "knowledge, exercise, or summary" },
+                    priority: { type: Type.STRING, description: "high, medium, or low" },
+                    relatedNodeIds: { 
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING }
+                    }
+                  },
+                  required: ['id', 'title', 'content', 'type', 'priority', 'relatedNodeIds']
+                }
+              }
+            },
+            required: ['analysis', 'items']
+          }
+        }
+      });
+      resultStr = response.text || '{"analysis": "", "items": []}';
+    }
+
+    if (logCallback) {
+      logCallback({
+        type: 'review',
+        model: settings.reviewModel || settings.chatModel,
+        prompt,
+        response: resultStr
+      });
+    }
+  } catch (error: any) {
+    if (logCallback) {
+      logCallback({
+        type: 'review',
+        model: settings.reviewModel || settings.chatModel,
+        prompt,
+        response: `Error: ${error.message}`
+      });
+    }
+    throw error;
+  }
+
+  // Clean up potential markdown formatting
+  if (resultStr.startsWith('```')) {
+    resultStr = resultStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+  }
+
+  const parsed = JSON.parse(resultStr);
+  
+  return {
+    id: Math.random().toString(36).substr(2, 9),
+    subject,
+    createdAt: Date.now(),
+    analysis: parsed.analysis,
+    items: parsed.items.map((item: any) => ({
+      ...item,
+      status: 'pending'
+    }))
+  };
 }
 

@@ -1,47 +1,168 @@
-export type Subject = '语文' | '数学' | '英语' | '物理' | '化学' | '生物';
+export type Subject = string;
 
-export type MemoryFunction = '细碎记忆' | '方法论' | '关联型记忆' | '系统型';
-export type MemoryPurpose = '内化型' | '记忆型' | '补充知识型' | '系统型';
+export type MemoryFunction = string;
+export type MemoryPurpose = string;
+
+export interface FSRSData {
+  due: number; // timestamp
+  stability: number;
+  difficulty: number;
+  elapsed_days: number;
+  scheduled_days: number;
+  learning_steps: number;
+  reps: number;
+  lapses: number;
+  state: number;
+}
 
 export interface Memory {
   id: string;
   subject: Subject;
-  content: string;
+  region?: string; // e.g., 'Beijing', 'National Paper 1'
+  content: string; // Question stem or knowledge point
+  correctAnswer?: string; // Standard answer
+  questionType?: string; // e.g., 'multiple-choice', 'fill-in-the-blank', 'essay'
+  source?: string; // e.g., '2023 Midterm Exam'
   functionType: MemoryFunction;
   purposeType: MemoryPurpose;
   knowledgeNodeIds: string[];
-  confidence: number; // 0-100
+  confidence: number; // 0-100, maps to FSRS retrievability
+  mastery: number; // 0-100, maps to FSRS stability
   createdAt: number;
   lastReviewed?: number;
   notes?: string;
   sourceType: 'text' | 'image';
   imageUrl?: string;
+  imageUrls?: string[];
   isMistake?: boolean;
+  wrongAnswer?: string;
+  errorReason?: string;
+  visualDescription?: string;
+  visualDescriptions?: string[];
   analysisProcess?: string;
+  fsrs?: FSRSData;
+  embedding?: number[]; // For RAG
 }
 
 export interface KnowledgeNode {
-  id: string;
+  id: string; // Hierarchical ID like "1.2.1"
   subject: Subject;
   name: string;
   parentId: string | null;
+  order: number; // Order within siblings
+  correlation?: { [targetId: string]: number }; // Correlation score 0-1 with other nodes
+  testingMethods?: string[]; // 考法
+}
+
+export interface CustomProvider {
+  id: string;
+  name: string;
+  type: 'openai' | 'gemini';
+  baseUrl?: string;
+  apiKey: string;
+  models: { id: string; name: string }[];
+}
+
+export interface CustomModel {
+  id: string;
+  name: string;
+  provider: 'openai' | 'gemini';
+  apiKey: string;
+  baseUrl?: string;
+  modelId: string;
 }
 
 export interface Settings {
   parseModel: string;
   chatModel: string;
   graphModel: string;
+  reviewModel: string;
+  embeddingModel?: string;
   cfWorkerUrl?: string;
   cfSyncToken?: string;
   homeworkPreferences?: string;
+  studentProfile?: string; // AI's perception of the student
+  dailyReviewLimit: number;
+  reviewBatchSize: number;
+  enableLogging: boolean;
+  minReviewDifficulty: number;
+  maxReviewDifficulty: number;
+  fontSize?: 'small' | 'medium' | 'large';
+  customModels?: CustomModel[]; // Legacy
+  customProviders?: CustomProvider[];
+}
+
+export interface AILog {
+  id: string;
+  timestamp: number;
+  type: 'parse' | 'chat' | 'graph' | 'review';
+  model: string;
+  prompt: string;
+  response: string;
+}
+
+export interface TextbookPage {
+  id: string;
+  pageNumber: number;
+  content: string;
+  imageUrl: string;
+  embedding?: number[];
+}
+
+export interface Textbook {
+  id: string;
+  name: string;
+  subject: Subject;
+  fileId?: string; // IDB key for the raw file
+  fileType?: string; // e.g., 'application/pdf'
+  totalPages?: number;
+  pages: TextbookPage[]; // Cached pages or pre-rendered pages
+  framework?: KnowledgeNode[]; // AI generated framework
+  createdAt: number;
+}
+
+export interface ReviewPlanItem {
+  id: string;
+  title: string;
+  content: string;
+  type: 'knowledge' | 'exercise' | 'summary';
+  priority: 'high' | 'medium' | 'low';
+  status: 'pending' | 'completed';
+  relatedNodeIds: string[];
+}
+
+export interface ReviewPlan {
+  id: string;
+  subject: Subject;
+  createdAt: number;
+  items: ReviewPlanItem[];
+  analysis: string; // AI's analysis of weak points
+}
+
+export interface InputHistoryItem {
+  id: string;
+  timestamp: number;
+  subject: Subject;
+  input: string;
+  images: string[];
+  parsedItems: any[];
+  newNodes: any[];
+  deletedNodeIds: string[];
+  aiAnalysis: string;
+  identifiedSubject: string;
 }
 
 export interface AppState {
   currentSubject: Subject;
   memories: Memory[];
   knowledgeNodes: KnowledgeNode[];
+  textbooks: Textbook[];
+  reviewPlans: ReviewPlan[];
   settings: Settings;
   lastSynced?: number;
+  logs: AILog[];
+  lastNodesState?: KnowledgeNode[]; // For one-level undo
+  inputHistory: InputHistoryItem[];
 }
 
 export type Action =
@@ -54,6 +175,21 @@ export type Action =
   | { type: 'DELETE_NODE'; payload: string }
   | { type: 'BATCH_ADD_MEMORIES'; payload: Memory[] }
   | { type: 'BATCH_ADD_NODES'; payload: KnowledgeNode[] }
+  | { type: 'BATCH_DELETE_NODES'; payload: string[] }
+  | { type: 'ADD_TEXTBOOK'; payload: Textbook }
+  | { type: 'UPDATE_TEXTBOOK'; payload: Textbook }
+  | { type: 'DELETE_TEXTBOOK'; payload: string }
+  | { type: 'ADD_REVIEW_PLAN'; payload: ReviewPlan }
+  | { type: 'UPDATE_REVIEW_PLAN'; payload: ReviewPlan }
+  | { type: 'DELETE_REVIEW_PLAN'; payload: string }
   | { type: 'UPDATE_SETTINGS'; payload: Partial<Settings> }
+  | { type: 'SET_CORRELATIONS'; payload: KnowledgeNode[] }
   | { type: 'SET_LAST_SYNCED'; payload: number }
-  | { type: 'LOAD_STATE'; payload: AppState };
+  | { type: 'LOAD_STATE'; payload: AppState }
+  | { type: 'ADD_LOG'; payload: Omit<AILog, 'id' | 'timestamp'> & { id?: string; timestamp?: number } }
+  | { type: 'CLEAR_LOGS' }
+  | { type: 'SAVE_NODES_STATE' }
+  | { type: 'UNDO_NODES' }
+  | { type: 'ADD_INPUT_HISTORY'; payload: InputHistoryItem }
+  | { type: 'DELETE_INPUT_HISTORY'; payload: string }
+  | { type: 'DELETE_MEMORIES_BY_FUNCTION'; payload: { subject: Subject; functionType: string } };

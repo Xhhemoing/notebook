@@ -3,26 +3,91 @@
 import React, { createContext, useContext, useReducer, useEffect, useState } from 'react';
 import { AppState, Action, Subject, KnowledgeNode, Memory } from './types';
 import { v4 as uuidv4 } from 'uuid';
+import { openDB } from 'idb';
+
+const DB_NAME = 'gaokao-ai-db';
+const STORE_NAME = 'app-state';
+const FILE_STORE_NAME = 'app-files';
+
+async function initDB() {
+  return openDB(DB_NAME, 2, {
+    upgrade(db, oldVersion, newVersion, transaction) {
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+      if (!db.objectStoreNames.contains(FILE_STORE_NAME)) {
+        db.createObjectStore(FILE_STORE_NAME);
+      }
+    },
+  });
+}
+
+export async function saveFile(id: string, data: ArrayBuffer) {
+  try {
+    const db = await initDB();
+    await db.put(FILE_STORE_NAME, data, id);
+  } catch (e) {
+    console.error('Failed to save file to IDB', e);
+  }
+}
+
+export async function loadFile(id: string): Promise<ArrayBuffer | null> {
+  try {
+    const db = await initDB();
+    return await db.get(FILE_STORE_NAME, id);
+  } catch (e) {
+    console.error('Failed to load file from IDB', e);
+    return null;
+  }
+}
+
+export async function deleteFile(id: string) {
+  try {
+    const db = await initDB();
+    await db.delete(FILE_STORE_NAME, id);
+  } catch (e) {
+    console.error('Failed to delete file from IDB', e);
+  }
+}
+
+async function saveState(state: AppState) {
+  try {
+    const db = await initDB();
+    await db.put(STORE_NAME, state, 'main-state');
+  } catch (e) {
+    console.error('Failed to save state to IDB', e);
+  }
+}
+
+async function loadState(): Promise<AppState | null> {
+  try {
+    const db = await initDB();
+    return await db.get(STORE_NAME, 'main-state');
+  } catch (e) {
+    console.error('Failed to load state from IDB', e);
+    return null;
+  }
+}
 
 const initialNodes: KnowledgeNode[] = [
-  { id: 'math-root', subject: '数学', name: '高中数学', parentId: null },
-  { id: 'math-algebra', subject: '数学', name: '代数', parentId: 'math-root' },
-  { id: 'math-geometry', subject: '数学', name: '几何', parentId: 'math-root' },
-  { id: 'math-func', subject: '数学', name: '函数与导数', parentId: 'math-algebra' },
-  { id: 'math-seq', subject: '数学', name: '数列', parentId: 'math-algebra' },
+  { id: '1', subject: '数学', name: '高中数学', parentId: null, order: 1 },
+  { id: '1.1', subject: '数学', name: '代数', parentId: '1', order: 1 },
+  { id: '1.2', subject: '数学', name: '几何', parentId: '1', order: 2 },
+  { id: '1.1.1', subject: '数学', name: '函数与导数', parentId: '1.1', order: 1 },
+  { id: '1.1.2', subject: '数学', name: '数列', parentId: '1.1', order: 2 },
   
-  { id: 'chem-root', subject: '化学', name: '高中化学', parentId: null },
-  { id: 'chem-org', subject: '化学', name: '有机化学', parentId: 'chem-root' },
-  { id: 'chem-inorg', subject: '化学', name: '无机化学', parentId: 'chem-root' },
-  { id: 'chem-elem', subject: '化学', name: '元素化合物', parentId: 'chem-inorg' },
+  { id: '2', subject: '化学', name: '高中化学', parentId: null, order: 2 },
+  { id: '2.1', subject: '化学', name: '有机化学', parentId: '2', order: 1 },
+  { id: '2.2', subject: '化学', name: '无机化学', parentId: '2', order: 2 },
+  { id: '2.2.1', subject: '化学', name: '元素化合物', parentId: '2.2', order: 1 },
   
-  { id: 'phy-root', subject: '物理', name: '高中物理', parentId: null },
-  { id: 'phy-mech', subject: '物理', name: '力学', parentId: 'phy-root' },
-  { id: 'phy-em', subject: '物理', name: '电磁学', parentId: 'phy-root' },
+  { id: '3', subject: '物理', name: '高中物理', parentId: null, order: 3 },
+  { id: '3.1', subject: '物理', name: '力学', parentId: '3', order: 1 },
+  { id: '3.2', subject: '物理', name: '电磁学', parentId: '3', order: 2 },
 
-  { id: 'chi-root', subject: '语文', name: '高中语文', parentId: null },
-  { id: 'eng-root', subject: '英语', name: '高中英语', parentId: null },
-  { id: 'bio-root', subject: '生物', name: '高中生物', parentId: null },
+  { id: '4', subject: '语文', name: '高中语文', parentId: null, order: 4 },
+  { id: '5', subject: '英语', name: '高中英语', parentId: null, order: 5 },
+  { id: '6', subject: '生物', name: '高中生物', parentId: null, order: 6 },
 ];
 
 const initialMemories: Memory[] = [
@@ -32,8 +97,9 @@ const initialMemories: Memory[] = [
     content: '标况下为液体：HF',
     functionType: '细碎记忆',
     purposeType: '记忆型',
-    knowledgeNodeIds: ['chem-elem'],
+    knowledgeNodeIds: ['2.2.1'],
     confidence: 40,
+    mastery: 20,
     createdAt: Date.now() - 86400000,
     sourceType: 'text',
   },
@@ -43,8 +109,9 @@ const initialMemories: Memory[] = [
     content: '12g石墨中含有的C-C键数目为1.5Na',
     functionType: '细碎记忆',
     purposeType: '内化型',
-    knowledgeNodeIds: ['chem-inorg'],
+    knowledgeNodeIds: ['2.2'],
     confidence: 60,
+    mastery: 40,
     createdAt: Date.now() - 172800000,
     sourceType: 'text',
   },
@@ -54,8 +121,9 @@ const initialMemories: Memory[] = [
     content: '求导后判断单调性，注意定义域的限制。若导数含有参数，需分类讨论参数范围。',
     functionType: '方法论',
     purposeType: '内化型',
-    knowledgeNodeIds: ['math-func'],
+    knowledgeNodeIds: ['1.1.1'],
     confidence: 80,
+    mastery: 60,
     createdAt: Date.now(),
     sourceType: 'text',
   }
@@ -65,12 +133,23 @@ const initialState: AppState = {
   currentSubject: '数学',
   memories: initialMemories,
   knowledgeNodes: initialNodes,
+  textbooks: [],
+  reviewPlans: [],
   settings: {
     parseModel: 'gemini-3-flash-preview',
     chatModel: 'gemini-3-flash-preview',
     graphModel: 'gemini-3-flash-preview',
+    reviewModel: 'gemini-3-flash-preview',
     homeworkPreferences: '例如：+号代表需要加入错题本，打叉代表做错了，波浪线代表不确定的知识点。请根据这些标记进行分析。',
-  }
+    studentProfile: '该学生目前处于高考复习阶段，理科基础较好，但容易在细节上出错。需要加强对基础概念的内化。',
+    dailyReviewLimit: 20,
+    reviewBatchSize: 3,
+    enableLogging: true,
+    minReviewDifficulty: 0,
+    maxReviewDifficulty: 10,
+  },
+  logs: [],
+  inputHistory: []
 };
 
 function reducer(state: AppState, action: Action): AppState {
@@ -108,12 +187,75 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, memories: [...action.payload, ...state.memories] };
     case 'BATCH_ADD_NODES':
       return { ...state, knowledgeNodes: [...state.knowledgeNodes, ...action.payload] };
+    case 'BATCH_DELETE_NODES':
+      const updatedMemoriesBatch = state.memories.map(m => ({
+        ...m,
+        knowledgeNodeIds: m.knowledgeNodeIds.filter(id => !action.payload.includes(id))
+      }));
+      return { 
+        ...state, 
+        knowledgeNodes: state.knowledgeNodes.filter((n) => !action.payload.includes(n.id)),
+        memories: updatedMemoriesBatch
+      };
+    case 'ADD_TEXTBOOK':
+      return { ...state, textbooks: [...state.textbooks, action.payload] };
+    case 'UPDATE_TEXTBOOK':
+      return {
+        ...state,
+        textbooks: state.textbooks.map(t => t.id === action.payload.id ? action.payload : t)
+      };
+    case 'DELETE_TEXTBOOK':
+      return { ...state, textbooks: state.textbooks.filter(t => t.id !== action.payload) };
+    case 'ADD_REVIEW_PLAN':
+      return { ...state, reviewPlans: [action.payload, ...state.reviewPlans] };
+    case 'UPDATE_REVIEW_PLAN':
+      return {
+        ...state,
+        reviewPlans: state.reviewPlans.map(p => p.id === action.payload.id ? action.payload : p)
+      };
+    case 'DELETE_REVIEW_PLAN':
+      return { ...state, reviewPlans: state.reviewPlans.filter(p => p.id !== action.payload) };
     case 'UPDATE_SETTINGS':
       return { ...state, settings: { ...state.settings, ...action.payload } };
+    case 'SET_CORRELATIONS':
+      return { ...state, knowledgeNodes: action.payload };
     case 'SET_LAST_SYNCED':
       return { ...state, lastSynced: action.payload };
     case 'LOAD_STATE':
-      return { ...initialState, ...action.payload, settings: { ...initialState.settings, ...(action.payload.settings || {}) } };
+      return { 
+        ...initialState, 
+        ...action.payload, 
+        settings: { ...initialState.settings, ...(action.payload.settings || {}) }, 
+        logs: action.payload.logs || [],
+        textbooks: action.payload.textbooks || [],
+        reviewPlans: action.payload.reviewPlans || [],
+        inputHistory: action.payload.inputHistory || []
+      };
+    case 'ADD_LOG':
+      const logWithMetadata = {
+        timestamp: Date.now(),
+        ...action.payload,
+        id: uuidv4(), // Always generate a new unique ID to fix React key warning
+      };
+      return { ...state, logs: [logWithMetadata, ...state.logs].slice(0, 500) }; // Keep last 500 logs
+    case 'CLEAR_LOGS':
+      return { ...state, logs: [] };
+    case 'SAVE_NODES_STATE':
+      return { ...state, lastNodesState: [...state.knowledgeNodes] };
+    case 'UNDO_NODES':
+      if (!state.lastNodesState) return state;
+      return { ...state, knowledgeNodes: state.lastNodesState, lastNodesState: undefined };
+    case 'ADD_INPUT_HISTORY':
+      return { ...state, inputHistory: [action.payload, ...state.inputHistory].slice(0, 50) };
+    case 'DELETE_INPUT_HISTORY':
+      return { ...state, inputHistory: state.inputHistory.filter(h => h.id !== action.payload) };
+    case 'DELETE_MEMORIES_BY_FUNCTION':
+      return {
+        ...state,
+        memories: state.memories.filter(m => 
+          !(m.subject === action.payload.subject && m.functionType === action.payload.functionType)
+        )
+      };
     default:
       return state;
   }
@@ -129,22 +271,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setIsMounted(true);
-    const saved = localStorage.getItem('gaokao-ai-state');
-    if (saved) {
+    async function load() {
       try {
-        const parsed = JSON.parse(saved);
-        dispatch({ type: 'LOAD_STATE', payload: parsed });
+        const idbState = await loadState();
+        if (idbState) {
+          dispatch({ type: 'LOAD_STATE', payload: idbState });
+        } else {
+          // Fallback to localStorage migration
+          const saved = localStorage.getItem('gaokao-ai-state');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            dispatch({ type: 'LOAD_STATE', payload: parsed });
+            // Save to IDB and remove from localStorage to free up space
+            await saveState(parsed);
+            localStorage.removeItem('gaokao-ai-state');
+          }
+        }
       } catch (e) {
-        console.error('Failed to parse state', e);
+        console.error('Failed to load state', e);
+      } finally {
+        setIsMounted(true);
       }
     }
+    
+    load();
   }, []);
 
   useEffect(() => {
     if (isMounted) {
-      localStorage.setItem('gaokao-ai-state', JSON.stringify(state));
+      saveState(state);
     }
   }, [state, isMounted]);
 

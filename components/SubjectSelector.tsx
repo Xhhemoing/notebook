@@ -10,16 +10,16 @@ export function SubjectSelector() {
   const { state, dispatch } = useAppContext();
 
   return (
-    <div className="flex gap-2 p-4 bg-white border-b border-slate-200 shadow-sm sticky top-0 z-10">
+    <div className="flex gap-2 p-3 bg-black border-b border-slate-900 sticky top-0 z-10 backdrop-blur-md bg-black/80">
       {SUBJECTS.map((sub) => (
         <button
           key={sub}
           onClick={() => dispatch({ type: 'SET_SUBJECT', payload: sub })}
           className={clsx(
-            'px-4 py-1.5 rounded-full text-sm font-medium transition-all',
+            'px-4 py-1.5 rounded-xl text-[11px] font-bold uppercase tracking-widest transition-all duration-300 border',
             state.currentSubject === sub
-              ? 'bg-blue-600 text-white shadow-md'
-              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              ? 'bg-indigo-600 text-white border-indigo-500 shadow-lg shadow-indigo-600/20 scale-105'
+              : 'bg-slate-900 text-slate-500 border-slate-800 hover:border-slate-700 hover:text-slate-300'
           )}
         >
           {sub}
