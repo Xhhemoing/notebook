@@ -4,7 +4,7 @@ import { BookOpen, BrainCircuit, MessageSquare, Network, PlusCircle, Settings, B
 import { clsx } from 'clsx';
 import { useState } from 'react';
 
-export type View = 'dashboard' | 'input' | 'graph' | 'memory' | 'mistakes' | 'chat' | 'settings' | 'review' | 'textbooks' | 'data';
+export type View = 'dashboard' | 'input' | 'graph' | 'memory' | 'mistakes' | 'chat' | 'settings' | 'review' | 'textbooks';
 
 export function Sidebar({ currentView, setView }: { currentView: View; setView: (v: View) => void }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -18,7 +18,6 @@ export function Sidebar({ currentView, setView }: { currentView: View; setView: 
     { id: 'mistakes', label: '错题本', icon: BookX, color: 'text-red-400' },
     { id: 'review', label: '记忆复习', icon: GraduationCap, color: 'text-indigo-400' },
     { id: 'chat', label: 'AI 答疑', icon: MessageSquare, color: 'text-pink-400' },
-    { id: 'data', label: '数据管理', icon: Database, color: 'text-slate-400' },
   ];
 
   return (
@@ -33,8 +32,8 @@ export function Sidebar({ currentView, setView }: { currentView: View; setView: 
         </div>
         {!isCollapsed && (
           <div className="flex flex-col">
-            <h1 className="text-[9px] font-black text-white tracking-tighter uppercase">二轮复习助手</h1>
-            <span className="text-[5px] font-bold text-slate-600 uppercase tracking-[0.2em]">内测版 2.0</span>
+            <h1 className="text-xs font-black text-white tracking-tighter uppercase">二轮复习助手</h1>
+            <span className="text-[0.4rem] font-bold text-slate-600 uppercase tracking-[0.2em]">内测版 2.0</span>
           </div>
         )}
       </div>
@@ -47,7 +46,7 @@ export function Sidebar({ currentView, setView }: { currentView: View; setView: 
             <input 
               type="text" 
               placeholder="搜索..." 
-              className="w-full bg-slate-900/50 border border-slate-900 rounded-xl py-1.5 pl-7 pr-2 text-[8px] font-bold text-white placeholder:text-slate-700 focus:outline-none focus:border-indigo-500/50 transition-all uppercase tracking-widest"
+              className="w-full bg-slate-900/50 border border-slate-900 rounded-xl py-1.5 pl-7 pr-2 text-[0.6rem] font-bold text-white placeholder:text-slate-700 focus:outline-none focus:border-indigo-500/50 transition-all uppercase tracking-widest"
             />
           </div>
         </div>
@@ -64,7 +63,7 @@ export function Sidebar({ currentView, setView }: { currentView: View; setView: 
               onClick={() => setView(item.id as View)}
               title={isCollapsed ? item.label : undefined}
               className={clsx(
-                'w-full flex items-center gap-3 py-2.5 rounded-xl text-[9px] font-bold uppercase tracking-widest transition-all duration-300 group relative',
+                'w-full flex items-center gap-3 py-2.5 rounded-xl text-[0.65rem] font-bold uppercase tracking-widest transition-all duration-300 group relative',
                 isCollapsed ? 'justify-center px-0' : 'px-3',
                 isActive
                   ? 'bg-slate-900 text-white shadow-inner'
@@ -92,7 +91,7 @@ export function Sidebar({ currentView, setView }: { currentView: View; setView: 
         <button
           onClick={() => setView('settings')}
           className={clsx(
-            'w-full flex items-center gap-3 py-2.5 rounded-xl text-[9px] font-bold uppercase tracking-widest transition-all duration-300 group',
+            'w-full flex items-center gap-3 py-2.5 rounded-xl text-[0.65rem] font-bold uppercase tracking-widest transition-all duration-300 group',
             isCollapsed ? 'justify-center px-0' : 'px-3',
             currentView === 'settings'
               ? 'bg-slate-900 text-white'
@@ -115,8 +114,8 @@ export function Sidebar({ currentView, setView }: { currentView: View; setView: 
           </div>
           {!isCollapsed && (
             <div className="flex flex-col min-w-0">
-              <span className="text-[9px] font-black text-white truncate uppercase tracking-tighter">高三学子</span>
-              <span className="text-[7px] font-bold text-slate-600 truncate uppercase tracking-widest">复习进行中</span>
+              <span className="text-[0.65rem] font-black text-white truncate uppercase tracking-tighter">高三学子</span>
+              <span className="text-[0.5rem] font-bold text-slate-600 truncate uppercase tracking-widest">复习进行中</span>
             </div>
           )}
         </div>

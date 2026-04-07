@@ -54,7 +54,7 @@ function GaokaoCountdown() {
 
 export function Dashboard() {
   const { state } = useAppContext();
-  const now = Date.now(); // Static for this render, no interval here
+  const [now] = useState(() => Date.now());
 
   const subjectMemories = useMemo(() => state.memories.filter((m) => m.subject === state.currentSubject), [state.memories, state.currentSubject]);
   

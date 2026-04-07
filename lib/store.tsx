@@ -256,6 +256,44 @@ function reducer(state: AppState, action: Action): AppState {
           !(m.subject === action.payload.subject && m.functionType === action.payload.functionType)
         )
       };
+    case 'BATCH_DELETE_MEMORIES':
+      return {
+        ...state,
+        memories: state.memories.filter(m => !action.payload.includes(m.id))
+      };
+    case 'BATCH_DELETE_TEXTBOOKS':
+      return {
+        ...state,
+        textbooks: state.textbooks.filter(t => !action.payload.includes(t.id))
+      };
+    case 'BATCH_DELETE_NODES':
+      return {
+        ...state,
+        knowledgeNodes: state.knowledgeNodes.filter(n => !action.payload.includes(n.id))
+      };
+    case 'DELETE_SUBJECT_DATA':
+      return {
+        ...state,
+        memories: state.memories.filter(m => m.subject !== action.payload.subject),
+        knowledgeNodes: state.knowledgeNodes.filter(n => n.subject !== action.payload.subject),
+        textbooks: state.textbooks.filter(t => t.subject !== action.payload.subject),
+        inputHistory: state.inputHistory.filter(h => h.subject !== action.payload.subject)
+      };
+    case 'DELETE_SUBJECT_NODES':
+      return {
+        ...state,
+        knowledgeNodes: state.knowledgeNodes.filter(n => n.subject !== action.payload.subject)
+      };
+    case 'DELETE_SUBJECT_MISTAKES':
+      return {
+        ...state,
+        memories: state.memories.filter(m => !(m.subject === action.payload.subject && m.isMistake))
+      };
+    case 'DELETE_SUBJECT_TEXTBOOKS':
+      return {
+        ...state,
+        textbooks: state.textbooks.filter(t => t.subject !== action.payload.subject)
+      };
     default:
       return state;
   }
@@ -299,7 +337,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (isMounted) {
-      saveState(state);
+      const timeoutId = setTimeout(() => {
+        saveState(state);
+      }, 1000); // Debounce save by 1 second
+      return () => clearTimeout(timeoutId);
     }
   }, [state, isMounted]);
 

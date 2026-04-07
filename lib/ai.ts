@@ -297,6 +297,52 @@ export async function searchTextbooks(
 }
 
 /**
+ * Search memories using RAG (Vector Search)
+ */
+export async function searchMemoriesRAG(
+  query: string,
+  memories: Memory[],
+  settings: Settings,
+  limit: number = 5,
+  base64Image?: string
+): Promise<Memory[]> {
+  let embeddingInput: any[] = [];
+  if (query && query.trim() !== '') {
+    embeddingInput.push(query);
+  }
+  if (base64Image) {
+    let data = base64Image;
+    let mimeType = 'image/jpeg';
+    if (base64Image.includes('base64,')) {
+      data = base64Image.split(',')[1];
+      mimeType = base64Image.split(';')[0].split(':')[1];
+    }
+    embeddingInput.push({
+      inlineData: { data, mimeType }
+    });
+  }
+  
+  if (embeddingInput.length === 0) {
+    return [];
+  }
+
+  const queryEmbedding = await getEmbedding(embeddingInput, settings);
+  const results: { memory: Memory; score: number }[] = [];
+
+  for (const memory of memories) {
+    if (memory.embedding) {
+      const score = cosineSimilarity(queryEmbedding, memory.embedding);
+      results.push({ memory, score });
+    }
+  }
+
+  return results
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(r => r.memory);
+}
+
+/**
  * Search memories using RAG
  */
 export async function searchAllRAG(
@@ -1173,7 +1219,7 @@ ${memoryContext || '暂无相关记忆。'}
 }
 
 export type GraphOperation = 
-  | { action: 'add'; name: string; parentId: string | null }
+  | { action: 'add'; name: string; parentId: string | null; nodeId?: string }
   | { action: 'delete'; nodeId: string }
   | { action: 'rename'; nodeId: string; name: string }
   | { action: 'move'; nodeId: string; parentId: string | null };

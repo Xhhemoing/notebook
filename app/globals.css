@@ -16,6 +16,11 @@
 :root {
   --background: var(--color-main-bg);
   --foreground: var(--color-text-primary);
+  --base-font-size: 13px;
+}
+
+html {
+  font-size: var(--base-font-size);
 }
 
 body {

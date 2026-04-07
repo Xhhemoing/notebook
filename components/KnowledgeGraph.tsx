@@ -456,37 +456,8 @@ export function KnowledgeGraph() {
             {state.currentSubject} 知识图谱
             <span className="text-[10px] font-normal text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded">支持拖拽、滚轮缩放、点击折叠</span>
           </h2>
-          <button
-            onClick={() => {
-              const nodeIds = new Set(state.knowledgeNodes.map(n => n.id));
-              const brokenNodes = state.knowledgeNodes.filter(n => n.parentId && !nodeIds.has(n.parentId));
-              if (brokenNodes.length === 0) {
-                alert('未发现异常节点。');
-                return;
-              }
-              if (confirm(`发现 ${brokenNodes.length} 个异常节点（父节点不存在），是否修复？`)) {
-                brokenNodes.forEach(node => {
-                  dispatch({ type: 'UPDATE_NODE', payload: { ...node, parentId: null } });
-                });
-                alert('修复完成。');
-              }
-            }}
-            className="flex items-center gap-1.5 px-2 py-1 bg-slate-900 border border-red-500/30 hover:border-red-500 text-red-400 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all"
-            title="修复父节点丢失导致的显示异常"
-          >
-            <AlertCircle className="w-3 h-3" />
-            修复异常
-          </button>
         </div>
         <div className="flex items-center gap-3">
-          <button
-            onClick={handleAutoReorganize}
-            disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-300 bg-purple-500/20 hover:bg-purple-500/30 rounded-lg transition-colors disabled:opacity-50"
-          >
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
-            AI 自动整理图谱
-          </button>
           <div className="flex bg-slate-800 p-1 rounded-lg">
             {viewMode === 'graph' && (
               <button

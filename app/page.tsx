@@ -12,50 +12,43 @@ import { MistakeBook } from '@/components/MistakeBook';
 import { AIChat } from '@/components/AIChat';
 import { Settings } from '@/components/Settings';
 import { ReviewSection } from '@/components/ReviewSection';
-import { DataManager } from '@/components/DataManager';
 import { TextbookModule } from '@/components/TextbookModule';
 import { clsx } from 'clsx';
+import { useEffect } from 'react';
 
 function MainLayout({ currentView, setCurrentView }: { currentView: View, setCurrentView: (v: View) => void }) {
   const { state } = useAppContext();
-  const fontSizeClass = state.settings.fontSize === 'large' ? 'text-[15px]' : state.settings.fontSize === 'small' ? 'text-[12px]' : 'text-[13px]';
+
+  useEffect(() => {
+    const fontSizeMap: Record<string, string> = {
+      small: '12px',
+      base: '14px',
+      medium: '16px',
+      large: '18px'
+    };
+    const fontSize = fontSizeMap[state.settings.fontSize || 'base'] || '14px';
+    document.documentElement.style.setProperty('--base-font-size', fontSize);
+  }, [state.settings.fontSize]);
 
   return (
-    <div className={clsx("flex h-screen bg-black font-sans overflow-hidden text-slate-200", fontSizeClass)}>
+    <div className="flex h-screen bg-black font-sans overflow-hidden text-slate-200">
       <Sidebar currentView={currentView} setView={setCurrentView} />
       <main className="flex-1 flex flex-col h-full overflow-hidden">
         <SubjectSelector />
         <div className="flex-1 overflow-y-auto relative">
-          <div className={clsx("absolute inset-0 overflow-y-auto", currentView === 'dashboard' ? 'block' : 'hidden')}>
-            <Dashboard />
-          </div>
-          <div className={clsx("absolute inset-0 overflow-y-auto", currentView === 'textbooks' ? 'block' : 'hidden')}>
-            <TextbookModule />
-          </div>
-          <div className={clsx("absolute inset-0 overflow-y-auto", currentView === 'input' ? 'block' : 'hidden')}>
-            <InputSection />
-          </div>
-          <div className={clsx("absolute inset-0 overflow-y-auto", currentView === 'graph' ? 'block' : 'hidden')}>
-            <KnowledgeGraph />
-          </div>
-          <div className={clsx("absolute inset-0 overflow-y-auto", currentView === 'memory' ? 'block' : 'hidden')}>
-            <MemoryBank />
-          </div>
-          <div className={clsx("absolute inset-0 overflow-y-auto", currentView === 'mistakes' ? 'block' : 'hidden')}>
-            <MistakeBook />
-          </div>
-          <div className={clsx("absolute inset-0 overflow-y-auto", currentView === 'review' ? 'block' : 'hidden')}>
-            <ReviewSection />
-          </div>
-          <div className={clsx("absolute inset-0 overflow-y-auto", currentView === 'chat' ? 'block' : 'hidden')}>
-            <AIChat />
-          </div>
-          <div className={clsx("absolute inset-0 overflow-y-auto", currentView === 'settings' ? 'block' : 'hidden')}>
-            <Settings />
-          </div>
-          <div className={clsx("absolute inset-0 overflow-y-auto", currentView === 'data' ? 'block' : 'hidden')}>
-            <DataManager />
-          </div>
+          {currentView === 'dashboard' && <Dashboard />}
+          {currentView === 'textbooks' && <TextbookModule />}
+          {currentView === 'input' && (
+            <div className="max-w-6xl mx-auto h-full">
+              <InputSection />
+            </div>
+          )}
+          {currentView === 'graph' && <KnowledgeGraph />}
+          {currentView === 'memory' && <MemoryBank />}
+          {currentView === 'mistakes' && <MistakeBook />}
+          {currentView === 'review' && <ReviewSection />}
+          {currentView === 'chat' && <AIChat />}
+          {currentView === 'settings' && <Settings />}
         </div>
       </main>
     </div>

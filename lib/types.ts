@@ -78,8 +78,8 @@ export interface Settings {
   graphModel: string;
   reviewModel: string;
   embeddingModel?: string;
-  cfWorkerUrl?: string;
-  cfSyncToken?: string;
+  cloudflareEndpoint?: string;
+  cloudflareToken?: string;
   homeworkPreferences?: string;
   studentProfile?: string; // AI's perception of the student
   dailyReviewLimit: number;
@@ -87,7 +87,8 @@ export interface Settings {
   enableLogging: boolean;
   minReviewDifficulty: number;
   maxReviewDifficulty: number;
-  fontSize?: 'small' | 'medium' | 'large';
+  fontSize?: 'small' | 'base' | 'medium' | 'large';
+  fsrsUpdateFrequency?: string;
   customModels?: CustomModel[]; // Legacy
   customProviders?: CustomProvider[];
 }
@@ -192,4 +193,10 @@ export type Action =
   | { type: 'UNDO_NODES' }
   | { type: 'ADD_INPUT_HISTORY'; payload: InputHistoryItem }
   | { type: 'DELETE_INPUT_HISTORY'; payload: string }
-  | { type: 'DELETE_MEMORIES_BY_FUNCTION'; payload: { subject: Subject; functionType: string } };
+  | { type: 'DELETE_MEMORIES_BY_FUNCTION'; payload: { subject: Subject; functionType: string } }
+  | { type: 'BATCH_DELETE_MEMORIES'; payload: string[] }
+  | { type: 'BATCH_DELETE_TEXTBOOKS'; payload: string[] }
+  | { type: 'DELETE_SUBJECT_DATA'; payload: { subject: Subject } }
+  | { type: 'DELETE_SUBJECT_NODES'; payload: { subject: Subject } }
+  | { type: 'DELETE_SUBJECT_MISTAKES'; payload: { subject: Subject } }
+  | { type: 'DELETE_SUBJECT_TEXTBOOKS'; payload: { subject: Subject } };

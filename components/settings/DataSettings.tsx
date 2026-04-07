@@ -13,14 +13,14 @@ export default function DataSettings() {
     setSyncing(direction);
     try {
       if (direction === 'push') {
-        const success = await pushToCloudflare(state);
+        const success = await pushToCloudflare(state, state.settings.cloudflareEndpoint || '', state.settings.cloudflareToken || '');
         if (success) {
           alert('同步到云端成功！');
         } else {
           alert('同步到云端失败，请检查配置。');
         }
       } else {
-        const cloudState = await pullFromCloudflare(state.settings);
+        const cloudState = await pullFromCloudflare(state.settings.cloudflareEndpoint || '', state.settings.cloudflareToken || '');
         if (cloudState) {
           dispatch({ type: 'LOAD_STATE', payload: cloudState });
           alert('从云端恢复成功！');

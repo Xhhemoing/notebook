@@ -379,7 +379,7 @@ export function InputSection() {
 
   if (loading) {
     return (
-      <div className="max-w-3xl mx-auto p-6 space-y-6">
+      <div className="max-w-5xl mx-auto p-6 space-y-6">
         <div className="bg-slate-900 rounded-2xl shadow-sm border border-slate-800 p-6 space-y-6">
           <div className="flex items-center gap-3">
             <Loader2 className="w-6 h-6 text-indigo-500 animate-spin" />
@@ -410,7 +410,7 @@ export function InputSection() {
 
   if (pendingReview) {
     return (
-      <div className="max-w-3xl mx-auto p-6 space-y-6 text-slate-200">
+      <div className="max-w-5xl mx-auto p-6 space-y-6 text-slate-200">
         <div className="bg-slate-900 rounded-2xl shadow-sm border border-slate-800 p-6">
           <h2 className="text-xl font-semibold text-slate-100 mb-4 flex items-center gap-2">
             <CheckCircle2 className="w-5 h-5 text-emerald-500" />
@@ -717,7 +717,7 @@ export function InputSection() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto p-3 space-y-3 text-slate-200">
+    <div className="max-w-4xl mx-auto p-3 space-y-3 text-slate-200">
       <div className="bg-slate-900 rounded-lg shadow-sm border border-slate-800 p-3">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-base font-semibold text-slate-100 flex items-center gap-2">

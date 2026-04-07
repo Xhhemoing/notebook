@@ -9,24 +9,23 @@ import GeneralSettings from './settings/GeneralSettings';
 import DataSettings from './settings/DataSettings';
 import LogSettings from './settings/LogSettings';
 import ModelAllocationSettings from './settings/ModelAllocationSettings';
+import DataGovernanceSettings from './settings/DataGovernanceSettings';
+import DataStatsSettings from './settings/DataStatsSettings';
+import { DataManager } from './DataManager';
 
 const MENU_ITEMS = [
+  { id: 'app-settings', label: '通用设置', icon: SettingsIcon },
   { id: 'model-service', label: '模型服务', icon: Cpu },
-  { id: 'model-allocation', label: '模型分配', icon: Database },
-  { id: 'app-settings', label: '应用设置', icon: SettingsIcon },
-  { id: 'mcp-tools', label: 'MCP工具', icon: Wrench },
-  { id: 'external-search', label: '外部搜索', icon: Globe },
-  { id: 'data-stats', label: '数据统计', icon: BarChart2 },
+  { id: 'data-management', label: '数据管理', icon: Database },
   { id: 'data-governance', label: '数据治理', icon: Shield },
-  { id: 'parameter-tuning', label: '参数调整', icon: Sliders },
+  { id: 'data-stats', label: '数据统计', icon: BarChart2 },
   { id: 'logs', label: 'AI 日志', icon: FileText },
-  { id: 'shortcuts', label: '快捷键', icon: Keyboard },
   { id: 'about', label: '关于', icon: HelpCircle },
 ];
 
 export function Settings() {
   const { state, dispatch } = useAppContext();
-  const [activeTab, setActiveTab] = useState('model-service');
+  const [activeTab, setActiveTab] = useState('app-settings');
   const [saved, setSaved] = useState(false);
 
   const handleSave = () => {
@@ -85,15 +84,45 @@ export function Settings() {
         <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
           <div className="max-w-5xl mx-auto">
             {activeTab === 'model-service' && <AISettings />}
-            {activeTab === 'model-allocation' && <ModelAllocationSettings />}
+            {activeTab === 'data-management' && <DataManager />}
             {activeTab === 'app-settings' && <GeneralSettings />}
-            {activeTab === 'data-governance' && <DataSettings />}
+            {activeTab === 'data-governance' && (
+              <div className="space-y-8">
+                <DataSettings />
+                <div className="pt-8 border-t border-slate-800">
+                  <h3 className="text-lg font-medium text-slate-200 mb-6 flex items-center gap-2">
+                    <Shield className="w-5 h-5 text-indigo-400" />
+                    数据清理与维护
+                  </h3>
+                  <DataGovernanceSettings />
+                </div>
+              </div>
+            )}
+            {activeTab === 'data-stats' && <DataStatsSettings />}
             {activeTab === 'logs' && <LogSettings />}
             
-            {/* Placeholders for unimplemented tabs */}
-            {['mcp-tools', 'external-search', 'data-stats', 'parameter-tuning', 'shortcuts', 'about'].includes(activeTab) && (
-              <div className="flex items-center justify-center h-64 text-slate-500 border border-dashed border-slate-800 rounded-2xl">
-                此功能正在开发中...
+            {activeTab === 'about' && (
+              <div className="flex flex-col items-center justify-center py-12 text-center space-y-6">
+                <div className="w-24 h-24 bg-indigo-600 rounded-3xl flex items-center justify-center shadow-2xl shadow-indigo-500/20">
+                  <GraduationCap className="w-12 h-12 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-bold text-white">高考 AI 学习助手</h3>
+                  <p className="text-slate-500 mt-2">版本 2.1.0 (Stable)</p>
+                </div>
+                <p className="max-w-md text-slate-400 leading-relaxed">
+                  专为高考学子打造的智能化学习辅助系统。集成 FSRS 记忆算法、RAG 知识检索与 AI 深度分析，助您高效备考。
+                </p>
+                <div className="flex gap-4">
+                  <button className="flex items-center gap-2 px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-medium transition-colors">
+                    <Globe className="w-4 h-4" />
+                    官方网站
+                  </button>
+                  <button className="flex items-center gap-2 px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-medium transition-colors">
+                    <ExternalLink className="w-4 h-4" />
+                    检查更新
+                  </button>
+                </div>
               </div>
             )}
           </div>

@@ -17,11 +17,12 @@ export default function GeneralSettings() {
             <label className="block text-sm font-medium text-slate-300 mb-1.5">全局字体大小</label>
             <select
               value={state.settings.fontSize || 'base'}
-              onChange={(e) => dispatch({ type: 'UPDATE_SETTINGS', payload: { fontSize: e.target.value as 'small' | 'medium' | 'large' } })}
+              onChange={(e) => dispatch({ type: 'UPDATE_SETTINGS', payload: { fontSize: e.target.value as 'small' | 'base' | 'medium' | 'large' } })}
               className="w-full p-3 bg-slate-950 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none text-slate-200"
             >
               <option value="small">小 (更紧凑)</option>
-              <option value="base">中 (默认)</option>
+              <option value="base">默认 (标准)</option>
+              <option value="medium">中 (适中)</option>
               <option value="large">大 (更易读)</option>
             </select>
             <p className="text-xs text-slate-500 mt-2">调整全局字体大小，以适应不同的屏幕和阅读习惯。</p>

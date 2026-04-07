@@ -16,7 +16,7 @@ export function SubjectSelector() {
           key={sub}
           onClick={() => dispatch({ type: 'SET_SUBJECT', payload: sub })}
           className={clsx(
-            'px-4 py-1.5 rounded-xl text-[11px] font-bold uppercase tracking-widest transition-all duration-300 border',
+            'px-4 py-1.5 rounded-xl text-[0.7rem] font-bold uppercase tracking-widest transition-all duration-300 border',
             state.currentSubject === sub
               ? 'bg-indigo-600 text-white border-indigo-500 shadow-lg shadow-indigo-600/20 scale-105'
               : 'bg-slate-900 text-slate-500 border-slate-800 hover:border-slate-700 hover:text-slate-300'
