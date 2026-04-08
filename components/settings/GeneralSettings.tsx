@@ -48,15 +48,28 @@ export default function GeneralSettings() {
       <section className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-sm">
         <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2">
           <BookOpen className="w-4 h-4" />
-          作业偏好
+          作业偏好与符号含义
         </h3>
         <div className="space-y-4">
-          <textarea
-            value={state.settings.homeworkPreferences || ''}
-            onChange={(e) => dispatch({ type: 'UPDATE_SETTINGS', payload: { homeworkPreferences: e.target.value } })}
-            className="w-full h-24 p-3 bg-slate-950 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none text-slate-200 resize-none"
-            placeholder="例如：优先复习错题，每天最多做20道数学题..."
-          />
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">作业偏好</label>
+            <textarea
+              value={state.settings.homeworkPreferences || ''}
+              onChange={(e) => dispatch({ type: 'UPDATE_SETTINGS', payload: { homeworkPreferences: e.target.value } })}
+              className="w-full h-24 p-3 bg-slate-950 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none text-slate-200 resize-none"
+              placeholder="例如：优先复习错题，每天最多做20道数学题..."
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">个人符号与标记含义</label>
+            <textarea
+              value={state.settings.userSymbols || ''}
+              onChange={(e) => dispatch({ type: 'UPDATE_SETTINGS', payload: { userSymbols: e.target.value } })}
+              className="w-full h-24 p-3 bg-slate-950 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none text-slate-200 resize-none"
+              placeholder="例如：☆代表重点，？代表不懂，红笔打叉代表错题，波浪线代表易错点..."
+            />
+            <p className="text-xs text-slate-500 mt-2">AI 将根据这些设定自动识别您上传的作业和试卷中的重点与错题。如果不填，AI 将尝试自主推断。</p>
+          </div>
         </div>
       </section>
 

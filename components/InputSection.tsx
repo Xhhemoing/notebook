@@ -16,10 +16,20 @@ import { saveImage } from '@/lib/db';
 
 export function InputSection() {
   const { state, dispatch } = useAppContext();
-  const [input, setInput] = useState('');
-  const [images, setImages] = useState<string[]>([]);
+  const [input, setInput] = useState(state.draftInput || '');
+  const [images, setImages] = useState<string[]>(state.draftImages || []);
   const [isScanMode, setIsScanMode] = useState(false);
   const [isFullExamMode, setIsFullExamMode] = useState(false);
+
+  // Sync draft state
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      if (input !== state.draftInput || images !== state.draftImages) {
+        dispatch({ type: 'UPDATE_DRAFT', payload: { draftInput: input, draftImages: images } });
+      }
+    }, 500);
+    return () => clearTimeout(timeoutId);
+  }, [input, images, dispatch, state.draftInput, state.draftImages]);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [explicitFunction, setExplicitFunction] = useState<string>('auto');
@@ -819,6 +829,12 @@ export function InputSection() {
           onDrop={handleDrop}
         >
           <div className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => setInput(prev => prev + '【重点】')} className="text-[10px] px-2 py-1 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 rounded border border-amber-500/20 transition-colors">☆ 标记重点</button>
+              <button onClick={() => setInput(prev => prev + '【疑问】')} className="text-[10px] px-2 py-1 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 rounded border border-blue-500/20 transition-colors">？ 标记疑问</button>
+              <button onClick={() => setInput(prev => prev + '【错题】')} className="text-[10px] px-2 py-1 bg-red-500/10 text-red-400 hover:bg-red-500/20 rounded border border-red-500/20 transition-colors">❌ 标记错题</button>
+              <button onClick={() => setInput(prev => prev + '【易错】')} className="text-[10px] px-2 py-1 bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 rounded border border-purple-500/20 transition-colors">⚠️ 标记易错点</button>
+            </div>
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}

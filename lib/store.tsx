@@ -295,6 +295,11 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         textbooks: state.textbooks.filter(t => t.subject !== action.payload.subject)
       };
+    case 'UPDATE_DRAFT':
+      return {
+        ...state,
+        ...action.payload
+      };
     default:
       return state;
   }

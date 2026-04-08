@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '@/lib/store';
-import { Shield, Trash2, RefreshCw, AlertTriangle, Sparkles, ShieldAlert, Filter, Database, Search } from 'lucide-react';
+import { Shield, Trash2, RefreshCw, AlertTriangle, Sparkles, ShieldAlert, Filter, Database, Search, Zap, Loader2 } from 'lucide-react';
 import { Memory, KnowledgeNode, Subject } from '@/lib/types';
 import clsx from 'clsx';
 

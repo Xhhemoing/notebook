@@ -1,7 +1,7 @@
 'use client';
 
 import { useAppContext } from '@/lib/store';
-import { Download, BrainCircuit, Search, Trash2, Edit, Info, Database, RefreshCw, Wand2 } from 'lucide-react';
+import { Download, BrainCircuit, Search, Trash2, Edit, Info, Database, RefreshCw, Wand2, AlertCircle, FileText } from 'lucide-react';
 import { useState, useRef, useMemo } from 'react';
 import { clsx } from 'clsx';
 import { calculateMetrics } from '@/lib/fsrs';
@@ -451,6 +451,26 @@ export function MemoryBank() {
                                 className="max-h-40 w-full object-cover group-hover:scale-105 transition-transform duration-700" 
                                 onClick={() => setPreviewImage(memory.imageUrl!)}
                               />
+                            )}
+                          </div>
+                        )}
+
+                        {memory.isMistake && (
+                          <div className="bg-red-500/5 text-red-200/80 text-[10px] p-4 rounded-xl mb-4 border border-red-500/10 prose prose-invert prose-sm max-w-none">
+                            <div className="flex items-center gap-2 mb-2 text-red-500 font-black uppercase tracking-[0.2em] text-[8px]">
+                              <AlertCircle className="w-3 h-3" /> 错题分析
+                            </div>
+                            {memory.wrongAnswer && (
+                              <div className="mb-2">
+                                <span className="font-bold text-red-400">我的错误答案：</span>
+                                <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{memory.wrongAnswer}</Markdown>
+                              </div>
+                            )}
+                            {memory.errorReason && (
+                              <div>
+                                <span className="font-bold text-red-400">错误原因分析：</span>
+                                <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{memory.errorReason}</Markdown>
+                              </div>
                             )}
                           </div>
                         )}

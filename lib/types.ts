@@ -81,6 +81,7 @@ export interface Settings {
   cloudflareEndpoint?: string;
   cloudflareToken?: string;
   homeworkPreferences?: string;
+  userSymbols?: string; // Meaning of user symbols
   studentProfile?: string; // AI's perception of the student
   dailyReviewLimit: number;
   reviewBatchSize: number;
@@ -164,6 +165,8 @@ export interface AppState {
   logs: AILog[];
   lastNodesState?: KnowledgeNode[]; // For one-level undo
   inputHistory: InputHistoryItem[];
+  draftInput?: string;
+  draftImages?: string[];
 }
 
 export type Action =
@@ -199,4 +202,5 @@ export type Action =
   | { type: 'DELETE_SUBJECT_DATA'; payload: { subject: Subject } }
   | { type: 'DELETE_SUBJECT_NODES'; payload: { subject: Subject } }
   | { type: 'DELETE_SUBJECT_MISTAKES'; payload: { subject: Subject } }
-  | { type: 'DELETE_SUBJECT_TEXTBOOKS'; payload: { subject: Subject } };
+  | { type: 'DELETE_SUBJECT_TEXTBOOKS'; payload: { subject: Subject } }
+  | { type: 'UPDATE_DRAFT'; payload: { draftInput?: string; draftImages?: string[] } };
