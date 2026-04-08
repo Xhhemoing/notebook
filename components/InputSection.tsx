@@ -19,6 +19,7 @@ export function InputSection() {
   const [input, setInput] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [isScanMode, setIsScanMode] = useState(false);
+  const [isFullExamMode, setIsFullExamMode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [explicitFunction, setExplicitFunction] = useState<string>('auto');
@@ -101,20 +102,36 @@ export function InputSection() {
     if (files.length > 0) {
       const newImages: string[] = [];
       for (const file of files) {
+        if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.name.endsWith('.docx')) {
+          // Process Word document using mammoth
+          try {
+            const mammoth = await import('mammoth');
+            const arrayBuffer = await file.arrayBuffer();
+            const result = await mammoth.extractRawText({ arrayBuffer });
+            setInput(prev => prev + (prev ? '\n\n' : '') + `[Word文档内容: ${file.name}]\n` + result.value);
+          } catch (err) {
+            console.error('Failed to parse Word document:', err);
+            alert('解析Word文档失败');
+          }
+          continue;
+        }
+
         const base64 = await new Promise<string>((resolve) => {
           const reader = new FileReader();
           reader.onloadend = () => resolve(reader.result as string);
           reader.readAsDataURL(file);
         });
         
-        if (isScanMode) {
+        if (isScanMode && file.type.startsWith('image/')) {
           const scanned = await processImageToScan(base64);
           newImages.push(scanned);
         } else {
           newImages.push(base64);
         }
       }
-      setImages(prev => [...prev, ...newImages]);
+      if (newImages.length > 0) {
+        setImages(prev => [...prev, ...newImages]);
+      }
     }
   }, [isScanMode]);
 
@@ -174,6 +191,10 @@ export function InputSection() {
         ? `${input}\n\n用户补充说明/修改要求：${supplementaryInstruction}`
         : input;
 
+      const fullPrompt = isFullExamMode 
+        ? `【整卷分析模式】请对上传的试卷和答题卡进行全面分析。请根据标记和答题情况，自动总结错题、薄弱知识点和记忆卡片。如果用户有追加要求，请结合要求分析。\n\n${promptInput}`
+        : promptInput;
+
       const existingFunctionTypes = Array.from(new Set(state.memories.map(m => m.functionType)));
       if (existingFunctionTypes.length === 0) existingFunctionTypes.push('细碎记忆', '方法论', '关联型记忆', '系统型');
       
@@ -181,7 +202,7 @@ export function InputSection() {
       if (existingPurposeTypes.length === 0) existingPurposeTypes.push('内化型', '记忆型', '补充知识型', '系统型');
 
       const { analysisProcess: aiAnalysis, parsedItems, newNodes, deletedNodeIds, identifiedSubject } = await parseNotes(
-        promptInput,
+        fullPrompt,
         state.currentSubject,
         state.knowledgeNodes,
         state.settings,
@@ -816,7 +837,7 @@ export function InputSection() {
           <div className="flex items-center gap-3">
             <input
               type="file"
-              accept="image/*"
+              accept="image/*,application/pdf,.docx"
               multiple
               className="hidden"
               ref={fileInputRef}
@@ -830,7 +851,7 @@ export function InputSection() {
               )}
             >
               <UploadCloud className="w-3.5 h-3.5" />
-              {isDragging ? "松开鼠标以上传图片" : "上传错题/笔记图片 (支持多张)"}
+              {isDragging ? "松开鼠标以上传" : "上传错题/试卷/笔记 (图片/PDF/Word)"}
             </button>
             <label className="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer hover:text-indigo-400 transition-colors">
               <input
@@ -841,12 +862,27 @@ export function InputSection() {
               />
               扫描模式 (增强清晰度)
             </label>
+            <label className="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer hover:text-indigo-400 transition-colors">
+              <input
+                type="checkbox"
+                checked={isFullExamMode}
+                onChange={(e) => setIsFullExamMode(e.target.checked)}
+                className="w-3.5 h-3.5 text-indigo-500 rounded border-slate-700 bg-slate-800 focus:ring-indigo-500"
+              />
+              整卷分析 (试卷+答题卡)
+            </label>
             {images.length > 0 && (
               <div className="flex gap-2 overflow-x-auto pb-2 max-w-md">
                 {images.map((img, idx) => (
                   <div key={idx} className="relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border border-slate-700">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={img} alt={`Preview ${idx}`} className="w-full h-full object-cover" />
+                    {img.startsWith('data:application/pdf') ? (
+                      <div className="w-full h-full flex items-center justify-center bg-slate-800 text-slate-400" title="PDF试卷">
+                        <FileText className="w-8 h-8" />
+                      </div>
+                    ) : (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img src={img} alt={`Preview ${idx}`} className="w-full h-full object-cover" />
+                    )}
                     <button
                       onClick={() => setImages(prev => prev.filter((_, i) => i !== idx))}
                       className="absolute top-1 right-1 bg-black/50 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs"

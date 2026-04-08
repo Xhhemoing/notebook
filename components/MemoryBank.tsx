@@ -430,13 +430,28 @@ export function MemoryBank() {
                         
                         {memory.imageUrl && (
                           <div className="relative group/img mb-4 rounded-xl overflow-hidden border border-slate-900 cursor-pointer shadow-xl">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img 
-                              src={memory.imageUrl} 
-                              alt="Source" 
-                              className="max-h-40 w-full object-cover group-hover:scale-105 transition-transform duration-700" 
-                              onClick={() => setPreviewImage(memory.imageUrl!)}
-                            />
+                            {memory.imageUrl.startsWith('data:application/pdf') ? (
+                              <div 
+                                className="w-full h-32 bg-slate-800 flex flex-col items-center justify-center text-slate-400 group-hover:bg-slate-700 transition-colors"
+                                onClick={() => {
+                                  const newWindow = window.open();
+                                  if (newWindow) {
+                                    newWindow.document.write(`<iframe src="${memory.imageUrl}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
+                                  }
+                                }}
+                              >
+                                <FileText className="w-8 h-8 mb-2" />
+                                <span className="text-xs font-bold">查看 PDF 附件</span>
+                              </div>
+                            ) : (
+                              /* eslint-disable-next-line @next/next/no-img-element */
+                              <img 
+                                src={memory.imageUrl} 
+                                alt="Source" 
+                                className="max-h-40 w-full object-cover group-hover:scale-105 transition-transform duration-700" 
+                                onClick={() => setPreviewImage(memory.imageUrl!)}
+                              />
+                            )}
                           </div>
                         )}
 

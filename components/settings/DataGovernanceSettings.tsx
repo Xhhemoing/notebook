@@ -10,6 +10,7 @@ export default function DataGovernanceSettings() {
   const { state, dispatch } = useAppContext();
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [isDeepScanning, setIsDeepScanning] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const subjects = Array.from(new Set([
     ...state.memories.map(m => m.subject),

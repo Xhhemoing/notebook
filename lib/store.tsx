@@ -266,11 +266,6 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         textbooks: state.textbooks.filter(t => !action.payload.includes(t.id))
       };
-    case 'BATCH_DELETE_NODES':
-      return {
-        ...state,
-        knowledgeNodes: state.knowledgeNodes.filter(n => !action.payload.includes(n.id))
-      };
     case 'DELETE_SUBJECT_DATA':
       return {
         ...state,
@@ -280,9 +275,15 @@ function reducer(state: AppState, action: Action): AppState {
         inputHistory: state.inputHistory.filter(h => h.subject !== action.payload.subject)
       };
     case 'DELETE_SUBJECT_NODES':
+      const subjectNodesToDelete = new Set(state.knowledgeNodes.filter(n => n.subject === action.payload.subject).map(n => n.id));
+      const memoriesAfterSubjectNodeDelete = state.memories.map(m => ({
+        ...m,
+        knowledgeNodeIds: m.knowledgeNodeIds.filter(id => !subjectNodesToDelete.has(id))
+      }));
       return {
         ...state,
-        knowledgeNodes: state.knowledgeNodes.filter(n => n.subject !== action.payload.subject)
+        knowledgeNodes: state.knowledgeNodes.filter(n => n.subject !== action.payload.subject),
+        memories: memoriesAfterSubjectNodeDelete
       };
     case 'DELETE_SUBJECT_MISTAKES':
       return {
