@@ -140,7 +140,11 @@ export function InputSection() {
         }
       }
       if (newImages.length > 0) {
-        setImages(prev => [...prev, ...newImages]);
+        setImages(prev => {
+          const updatedImages = [...prev, ...newImages];
+          dispatch({ type: 'UPDATE_DRAFT', payload: { draftInput: input, draftImages: updatedImages } });
+          return updatedImages;
+        });
       }
     }
   }, [isScanMode]);
@@ -329,6 +333,7 @@ export function InputSection() {
     setSuccess(true);
     setInput('');
     setImages([]);
+    dispatch({ type: 'UPDATE_DRAFT', payload: { draftInput: '', draftImages: [] } });
     setIsMistake(false);
     setSupplementaryInstruction('');
     setPendingReview(null);
@@ -837,7 +842,10 @@ export function InputSection() {
             </div>
             <textarea
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                dispatch({ type: 'UPDATE_DRAFT', payload: { draftInput: e.target.value, draftImages: images } });
+              }}
               placeholder="在此输入散乱的知识点、错题解析或方法论... (例如：标况下为液体：HF；12g石墨中含有的C-C键数目为1.5Na)"
               className="w-full h-32 p-3 rounded-lg border border-slate-700 bg-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none text-slate-200 text-xs"
             />
@@ -900,7 +908,13 @@ export function InputSection() {
                       <img src={img} alt={`Preview ${idx}`} className="w-full h-full object-cover" />
                     )}
                     <button
-                      onClick={() => setImages(prev => prev.filter((_, i) => i !== idx))}
+                      onClick={() => {
+                        setImages(prev => {
+                          const newImages = prev.filter((_, i) => i !== idx);
+                          dispatch({ type: 'UPDATE_DRAFT', payload: { draftInput: input, draftImages: newImages } });
+                          return newImages;
+                        });
+                      }}
                       className="absolute top-1 right-1 bg-black/50 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs"
                     >
                       ×

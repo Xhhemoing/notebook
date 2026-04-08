@@ -5,6 +5,7 @@ import { useAppContext } from '@/lib/store';
 import { Shield, Trash2, RefreshCw, AlertTriangle, Sparkles, ShieldAlert, Filter, Database, Search, Zap, Loader2 } from 'lucide-react';
 import { Memory, KnowledgeNode, Subject } from '@/lib/types';
 import clsx from 'clsx';
+import { v4 as uuidv4 } from 'uuid';
 
 export default function DataGovernanceSettings() {
   const { state, dispatch } = useAppContext();
