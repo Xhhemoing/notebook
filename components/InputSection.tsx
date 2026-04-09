@@ -107,8 +107,18 @@ export function InputSection() {
     });
   };
 
-  const handleImageUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement> | File) => {
-    const files = e instanceof File ? [e] : Array.from(e.target.files || []);
+  const handleImageUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement> | File | FileList | File[]) => {
+    let files: File[] = [];
+    if (e instanceof File) {
+      files = [e];
+    } else if (e instanceof FileList) {
+      files = Array.from(e);
+    } else if (Array.isArray(e)) {
+      files = e;
+    } else if (e && e.target && e.target.files) {
+      files = Array.from(e.target.files);
+    }
+
     if (files.length > 0) {
       const newImages: string[] = [];
       for (const file of files) {
@@ -121,7 +131,6 @@ export function InputSection() {
             setInput(prev => prev + (prev ? '\n\n' : '') + `[Word文档内容: ${file.name}]\n` + result.value);
           } catch (err) {
             console.error('Failed to parse Word document:', err);
-            alert('解析Word文档失败');
           }
           continue;
         }
@@ -140,11 +149,7 @@ export function InputSection() {
         }
       }
       if (newImages.length > 0) {
-        setImages(prev => {
-          const updatedImages = [...prev, ...newImages];
-          dispatch({ type: 'UPDATE_DRAFT', payload: { draftInput: input, draftImages: updatedImages } });
-          return updatedImages;
-        });
+        setImages(prev => [...prev, ...newImages]);
       }
     }
   }, [isScanMode]);
@@ -158,12 +163,39 @@ export function InputSection() {
     setIsDragging(false);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      handleImageUpload(file);
+    
+    const items = e.dataTransfer.items;
+    if (!items) return;
+
+    const files: File[] = [];
+    
+    const traverseFileTree = async (item: any, path: string = "") => {
+      if (item.isFile) {
+        const file = await new Promise<File>((resolve) => item.file(resolve));
+        files.push(file);
+      } else if (item.isDirectory) {
+        const dirReader = item.createReader();
+        const entries = await new Promise<any[]>((resolve) => dirReader.readEntries(resolve));
+        for (const entry of entries) {
+          await traverseFileTree(entry, path + item.name + "/");
+        }
+      }
+    };
+
+    const promises = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i].webkitGetAsEntry();
+      if (item) {
+        promises.push(traverseFileTree(item));
+      }
+    }
+
+    await Promise.all(promises);
+    if (files.length > 0) {
+      handleImageUpload(files);
     }
   };
 
