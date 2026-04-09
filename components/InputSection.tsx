@@ -297,9 +297,13 @@ export function InputSection() {
       dispatch({ type: 'ADD_INPUT_HISTORY', payload: historyItem });
 
       setAnalysisProcess(aiAnalysis);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to parse notes:', error);
-      alert('解析失败，请检查网络或稍后重试。');
+      if (error.message?.includes('AI client not initialized')) {
+        alert('AI 客户端未初始化。请检查设置中的 API Key 是否正确配置。');
+      } else {
+        alert('解析失败，请检查网络或 AI 配置：' + (error.message || '未知错误'));
+      }
     } finally {
       setLoading(false);
     }

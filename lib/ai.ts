@@ -16,8 +16,17 @@ import {
 // ... (existing imports)
 
 // Helper to get the global AI instance
+let globalAiInstance: GoogleGenAI | null = null;
 function getGlobalAI() {
-  return new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
+  if (!globalAiInstance) {
+    const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+    if (!apiKey) {
+      console.warn("NEXT_PUBLIC_GEMINI_API_KEY is not set. Gemini features will not work.");
+      return null;
+    }
+    globalAiInstance = new GoogleGenAI({ apiKey });
+  }
+  return globalAiInstance;
 }
 
 /**
@@ -526,7 +535,6 @@ export const searchAllRAGTool: FunctionDeclaration = {
 };
 
 // ... (rest of the file)
-const globalAi = getGlobalAI();
 
 /**
  * Helper to get the appropriate AI client and model name based on settings.
@@ -588,8 +596,9 @@ export function getAIClient(modelId: string, settings: Settings) {
   }
 
   // Default Gemini
+  const client = getGlobalAI();
   return { 
-    ai: globalAi, 
+    ai: client, 
     modelName: modelId, 
     isCustomOpenAI: false, 
     customModel: null 
@@ -835,10 +844,34 @@ ${input || '请分析图片中的作业和标记'}
 
   let result: any = { items: [], analysisProcess: '', identifiedSubject: subject };
   try {
-    result = JSON.parse(text);
+    // Clean up text in case AI wrapped it in markdown code blocks
+    let cleanText = text.trim();
+    if (cleanText.startsWith('```json')) {
+      cleanText = cleanText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+    } else if (cleanText.startsWith('```')) {
+      cleanText = cleanText.replace(/^```\n?/, '').replace(/\n?```$/, '');
+    }
+    
+    const parsed = JSON.parse(cleanText);
+    
+    if (Array.isArray(parsed)) {
+      // If AI returned an array of items directly
+      result.items = parsed;
+      // Try to find analysisProcess and identifiedSubject in any item if they exist there
+      const itemWithAnalysis = parsed.find(item => item.analysisProcess);
+      if (itemWithAnalysis) {
+        result.analysisProcess = itemWithAnalysis.analysisProcess;
+      }
+      const itemWithSubject = parsed.find(item => item.identifiedSubject);
+      if (itemWithSubject) {
+        result.identifiedSubject = itemWithSubject.identifiedSubject;
+      }
+    } else {
+      result = parsed;
+    }
   } catch (e) {
     console.error("Failed to parse AI response as JSON:", e, text);
-    result = { items: [], analysisProcess: '解析AI响应失败', identifiedSubject: subject };
+    result = { items: [], analysisProcess: '解析AI响应失败，请重试', identifiedSubject: subject };
   }
   
   // Process new nodes to assign hierarchical IDs
