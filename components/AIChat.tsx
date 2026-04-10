@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useAppContext } from '@/lib/store';
-import { chatWithAI, searchMemoriesRAG, reorganizeMemories, extractMemoryFromChat } from '@/lib/ai';
+import { chatWithAI, searchMemoriesRAG, reorganizeMemories, extractMemoryFromChat, generateGatewaySummary } from '@/lib/ai';
 import { Send, Bot, User, Loader2, Paperclip, X, Image as ImageIcon, BookOpen, UploadCloud, Search, Sparkles, Database, Settings2, RefreshCw, Wand2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import Markdown from 'react-markdown';
@@ -53,7 +53,10 @@ export function AIChat() {
     { id: 'quiz', name: '出题测试', prompt: '请根据我们刚才的讨论，出3道选择题考考我。' },
     { id: 'summarize', name: '总结提炼', prompt: '请将我们今天的讨论总结为3个核心记忆点。' },
     { id: 'extract', name: '提取记忆', prompt: '请从我们刚才的对话中，提取出我需要记住的知识点或错题，并直接告诉我。' },
-    { id: 'vocab_summary', name: '词汇归纳', prompt: '请帮我把记忆库中的英语生词、同义词、熟词生义进行一次系统的归纳和串联讲解。' }
+    { id: 'vocab_summary', name: '词汇归纳 (Gateway)', prompt: '请帮我把记忆库中的英语生词、同义词、熟词生义进行一次系统的归纳和串联讲解。', isGateway: true, gatewayType: 'vocabulary' as const },
+    { id: 'qa_summary', name: '题型总结 (Gateway)', prompt: '请帮我总结当前科目记忆库中的常见题型、高频考点和解题套路。', isGateway: true, gatewayType: 'question_types' as const },
+    { id: 'error_analysis', name: '错因分析 (Gateway)', prompt: '请帮我深度分析当前科目记忆库中的错题，找出我的认知盲区和常见失误。', isGateway: true, gatewayType: 'error_analysis' as const },
+    { id: 'concept_connection', name: '考点串联 (Gateway)', prompt: '请帮我把当前科目记忆库中的零散知识点串联起来，构建宏观知识脉络。', isGateway: true, gatewayType: 'knowledge_connection' as const }
   ];
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -432,9 +435,49 @@ export function AIChat() {
                       {SKILLS.map(skill => (
                         <button
                           key={skill.id}
-                          onClick={() => {
-                            setInput(prev => prev + (prev ? '\n' : '') + skill.prompt);
+                          onClick={async () => {
                             setShowSkills(false);
+                            if (skill.isGateway) {
+                              const userMsg: Message = { 
+                                id: Date.now().toString(), 
+                                role: 'user', 
+                                content: skill.prompt,
+                              };
+                              setMessages(prev => [...prev, userMsg]);
+                              setLoading(true);
+                              setRagStatus('正在启动 AI Gateway 全局数据分析...');
+                              
+                              try {
+                                const response = await generateGatewaySummary(
+                                  state.currentSubject,
+                                  state.memories,
+                                  skill.gatewayType,
+                                  state.settings,
+                                  (log) => {
+                                    if (state.settings.enableLogging) {
+                                      dispatch({
+                                        type: 'ADD_LOG',
+                                        payload: {
+                                          id: Math.random().toString(36).substr(2, 9),
+                                          timestamp: Date.now(),
+                                          ...log
+                                        }
+                                      });
+                                    }
+                                  }
+                                );
+                                const aiMsg: Message = { id: (Date.now() + 1).toString(), role: 'ai', content: response };
+                                setMessages(prev => [...prev, aiMsg]);
+                              } catch (error) {
+                                console.error('Gateway error:', error);
+                                setMessages(prev => [...prev, { id: Date.now().toString(), role: 'ai', content: '抱歉，网关分析失败，请稍后再试。' }]);
+                              } finally {
+                                setLoading(false);
+                                setRagStatus(null);
+                              }
+                            } else {
+                              setInput(prev => prev + (prev ? '\n' : '') + skill.prompt);
+                            }
                           }}
                           className="w-full text-left px-2 py-1.5 rounded-lg text-xs text-slate-300 hover:bg-indigo-500/20 hover:text-indigo-300 transition-colors"
                         >

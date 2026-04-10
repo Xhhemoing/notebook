@@ -1085,6 +1085,82 @@ ${nodes.map(n => `- ID: ${n.id}, Name: ${n.name}, ParentID: ${n.parentId || 'nul
   }
 }
 
+export async function generateGatewaySummary(
+  subject: Subject,
+  memories: Memory[],
+  summaryType: 'vocabulary' | 'question_types' | 'error_analysis' | 'knowledge_connection',
+  settings: Settings,
+  logCallback?: (log: any) => void
+): Promise<string> {
+  const relevantMemories = memories.filter(m => m.subject === subject);
+  
+  let prompt = '';
+  if (summaryType === 'vocabulary') {
+    const vocabMemories = relevantMemories.filter(m => m.type === 'vocabulary');
+    if (vocabMemories.length === 0) return '当前科目没有足够的词汇数据来进行归纳。';
+    prompt = `你是一个高级学习网关（AI Gateway）。请对以下【${subject}】科目的词汇记忆进行系统性的归纳和串联讲解。
+请提取同义词、近义词、熟词生义，并给出记忆建议。
+词汇数据：
+${vocabMemories.map(m => `- 词汇/内容: ${m.content}\n  含义: ${m.vocabularyData?.meaning || ''}\n  语境: ${m.vocabularyData?.context || ''}\n  用法: ${m.vocabularyData?.usage || ''}\n  同义词: ${m.vocabularyData?.synonyms?.join(', ') || ''}`).join('\n\n')}
+`;
+  } else if (summaryType === 'question_types') {
+    const qaMemories = relevantMemories.filter(m => m.type === 'qa' || m.questionType);
+    if (qaMemories.length === 0) return '当前科目没有足够的题目数据来进行题型总结。';
+    prompt = `你是一个高级学习网关（AI Gateway）。请对以下【${subject}】科目的题目进行常见题型总结。
+请归纳出高频考点、常见解题套路（方法论）以及易错陷阱。
+题目数据：
+${qaMemories.map(m => `- 题目: ${m.content}\n  题型: ${m.questionType || '未知'}\n  标准答案: ${m.correctAnswer || ''}\n  解析/笔记: ${m.notes || ''}`).join('\n\n')}
+`;
+  } else if (summaryType === 'error_analysis') {
+    const mistakeMemories = relevantMemories.filter(m => m.isMistake);
+    if (mistakeMemories.length === 0) return '当前科目没有足够的错题数据来进行错因分析。';
+    prompt = `你是一个高级学习网关（AI Gateway）。请对以下【${subject}】科目的错题进行深度的错因分析。
+请找出学生在认知上的盲区、常见的计算或审题失误，并给出针对性的提分建议。
+错题数据：
+${mistakeMemories.map(m => `- 错题: ${m.content}\n  错解: ${m.wrongAnswer || ''}\n  错因: ${m.errorReason || ''}\n  正解: ${m.correctAnswer || ''}`).join('\n\n')}
+`;
+  } else if (summaryType === 'knowledge_connection') {
+    const conceptMemories = relevantMemories.filter(m => m.type === 'concept' || !m.type);
+    if (conceptMemories.length === 0) return '当前科目没有足够的知识点数据来进行串联。';
+    prompt = `你是一个高级学习网关（AI Gateway）。请对以下【${subject}】科目的零散知识点进行串联和总结。
+请构建一个宏观的知识脉络，将这些碎片化的记忆点联系起来，形成系统的知识网络。
+知识点数据：
+${conceptMemories.map(m => `- 知识点: ${m.content}\n  笔记: ${m.notes || ''}`).join('\n\n')}
+`;
+  }
+
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(settings.chatModel, settings);
+
+  try {
+    let result = '';
+    if (isCustomOpenAI && customModel) {
+      result = await fetchOpenAI(customModel, prompt);
+    } else if (client) {
+      const response = await client.models.generateContent({
+        model: modelName,
+        contents: prompt,
+      });
+      result = response.text || '生成总结失败。';
+    } else {
+      throw new Error('AI client not initialized');
+    }
+
+    if (logCallback && settings.enableLogging) {
+      logCallback({
+        type: 'chat',
+        model: settings.chatModel,
+        prompt: prompt,
+        response: result
+      });
+    }
+
+    return result;
+  } catch (error: any) {
+    console.error('Gateway Summary Error:', error);
+    throw error;
+  }
+}
+
 export async function chatWithAI(
   query: string,
   subject: Subject,
