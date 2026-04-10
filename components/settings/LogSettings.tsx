@@ -47,7 +47,7 @@ export default function LogSettings() {
               <div key={log.id} className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3">
                 <div className="flex items-center justify-between text-xs">
                   <span className="px-2 py-1 bg-slate-800 text-slate-300 rounded-md font-medium">
-                    {log.type.toUpperCase()}
+                    {(log.type || '').toUpperCase()}
                   </span>
                   <span className="text-slate-500">
                     {new Date(log.timestamp).toLocaleString()}

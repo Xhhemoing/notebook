@@ -8,7 +8,7 @@ import { Memory, KnowledgeNode, Textbook, Subject } from '@/lib/types';
 
 export function DataManager() {
   const { state, dispatch } = useAppContext();
-  const [activeTab, setActiveTab] = useState<'memories' | 'rag' | 'textbooks'>('memories');
+  const [activeTab, setActiveTab] = useState<'memories' | 'rag' | 'textbooks' | 'resources'>('memories');
   const [searchQuery, setSearchQuery] = useState('');
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [collapsedItems, setCollapsedItems] = useState<Set<string>>(new Set());
@@ -50,6 +50,8 @@ export function DataManager() {
         dispatch({ type: 'BATCH_DELETE_NODES', payload: ids });
       } else if (activeTab === 'textbooks') {
         dispatch({ type: 'BATCH_DELETE_TEXTBOOKS', payload: ids });
+      } else if (activeTab === 'resources') {
+        ids.forEach(id => dispatch({ type: 'DELETE_RESOURCE', payload: id }));
       }
       setSelectedIds(new Set());
     }
@@ -76,10 +78,18 @@ export function DataManager() {
     );
   }, [state.textbooks, subjectFilter, searchQuery]);
 
+  const filteredResources = useMemo(() => {
+    return (state.resources || []).filter(r => 
+      (subjectFilter === 'all' || r.subject === subjectFilter) && 
+      (r.name.toLowerCase().includes(searchQuery.toLowerCase()) || r.subject.toLowerCase().includes(searchQuery.toLowerCase()))
+    );
+  }, [state.resources, subjectFilter, searchQuery]);
+
   const subjects = Array.from(new Set([
     ...state.memories.map(m => m.subject),
     ...state.knowledgeNodes.map(n => n.subject),
-    ...state.textbooks.map(t => t.subject)
+    ...state.textbooks.map(t => t.subject),
+    ...(state.resources || []).map(r => r.subject)
   ]));
 
   const handleSaveMemoryEdit = (id: string) => {
@@ -186,6 +196,16 @@ export function DataManager() {
           >
             <FileText className="w-4 h-4" />
             文件/课本 ({state.textbooks.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('resources')}
+            className={clsx(
+              "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold uppercase tracking-widest transition-colors shrink-0",
+              activeTab === 'resources' ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:bg-slate-800"
+            )}
+          >
+            <Database className="w-4 h-4" />
+            资源库 ({(state.resources || []).length})
           </button>
         </div>
 
@@ -439,6 +459,60 @@ export function DataManager() {
             ))}
             {filteredTextbooks.length === 0 && (
               <div className="p-8 text-center text-slate-500 text-sm">暂无匹配的课本文件</div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'resources' && (
+          <div className="divide-y divide-slate-800 max-h-[60vh] overflow-y-auto custom-scrollbar">
+            <div className="p-3 bg-slate-900/80 border-b border-slate-800 flex items-center gap-3 sticky top-0 z-10">
+              <button
+                onClick={() => {
+                  if (selectedIds.size === filteredResources.length) {
+                    setSelectedIds(new Set());
+                  } else {
+                    setSelectedIds(new Set(filteredResources.map(r => r.id)));
+                  }
+                }}
+                className="text-slate-500 hover:text-white transition-colors"
+              >
+                {selectedIds.size === filteredResources.length && filteredResources.length > 0 ? <CheckSquare className="w-5 h-5 text-indigo-500" /> : <Square className="w-5 h-5" />}
+              </button>
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">全选 / 已选 {selectedIds.size} 项</span>
+            </div>
+            {filteredResources.map(resource => (
+              <div key={resource.id} className={clsx("p-4 hover:bg-slate-800/50 transition-colors flex items-center gap-4", selectedIds.has(resource.id) && "bg-indigo-500/5")}>
+                <button
+                  onClick={() => toggleSelect(resource.id)}
+                  className="text-slate-700 hover:text-indigo-500 transition-colors shrink-0"
+                >
+                  {selectedIds.has(resource.id) ? <CheckSquare className="w-5 h-5 text-indigo-500" /> : <Square className="w-5 h-5" />}
+                </button>
+                <div className="flex items-center gap-4 flex-1 min-w-0" onClick={() => toggleCollapse(resource.id)}>
+                  <div className="w-10 h-10 bg-teal-500/10 rounded-xl flex items-center justify-center shrink-0 border border-teal-500/20">
+                    <Database className="w-5 h-5 text-teal-400" />
+                  </div>
+                  <div className="cursor-pointer">
+                    <h4 className="text-sm font-bold text-slate-200">{resource.name}</h4>
+                    <p className={clsx("text-xs text-slate-500 mt-1 uppercase tracking-widest", collapsedItems.has(resource.id) ? "hidden" : "block")}>
+                      {resource.subject} · {resource.isFolder ? '文件夹' : '文件'} · {new Date(resource.createdAt).toLocaleDateString()}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    if(confirm('确定要删除这个资源吗？')) {
+                      dispatch({ type: 'DELETE_RESOURCE', payload: resource.id });
+                    }
+                  }}
+                  className="p-2 text-slate-500 hover:text-red-400 transition-colors rounded-lg hover:bg-red-400/10"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+            {filteredResources.length === 0 && (
+              <div className="p-8 text-center text-slate-500 text-sm">暂无匹配的资源</div>
             )}
           </div>
         )}

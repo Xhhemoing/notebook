@@ -154,6 +154,19 @@ export interface InputHistoryItem {
   identifiedSubject: string;
 }
 
+export interface Resource {
+  id: string;
+  name: string;
+  type: string; // 'folder', 'pdf', 'image', 'doc', 'other'
+  size: number;
+  createdAt: number;
+  data?: string; // base64 for local, URL for remote
+  subject: Subject;
+  tags?: string[];
+  parentId?: string | null;
+  isFolder?: boolean;
+}
+
 export interface AppState {
   currentSubject: Subject;
   memories: Memory[];
@@ -167,6 +180,7 @@ export interface AppState {
   inputHistory: InputHistoryItem[];
   draftInput?: string;
   draftImages?: string[];
+  resources: Resource[];
 }
 
 export type Action =
@@ -203,4 +217,7 @@ export type Action =
   | { type: 'DELETE_SUBJECT_NODES'; payload: { subject: Subject } }
   | { type: 'DELETE_SUBJECT_MISTAKES'; payload: { subject: Subject } }
   | { type: 'DELETE_SUBJECT_TEXTBOOKS'; payload: { subject: Subject } }
-  | { type: 'UPDATE_DRAFT'; payload: { draftInput?: string; draftImages?: string[] } };
+  | { type: 'UPDATE_DRAFT'; payload: { draftInput?: string; draftImages?: string[] } }
+  | { type: 'ADD_RESOURCE'; payload: Resource }
+  | { type: 'DELETE_RESOURCE'; payload: string }
+  | { type: 'SET_RESOURCES'; payload: Resource[] };

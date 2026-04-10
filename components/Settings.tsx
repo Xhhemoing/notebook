@@ -83,7 +83,18 @@ export function Settings() {
 
         <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
           <div className="max-w-5xl mx-auto">
-            {activeTab === 'model-service' && <AISettings />}
+            {activeTab === 'model-service' && (
+              <div className="space-y-8">
+                <ModelAllocationSettings />
+                <div className="pt-8 border-t border-slate-800">
+                  <h3 className="text-lg font-medium text-slate-200 mb-6 flex items-center gap-2">
+                    <Cpu className="w-5 h-5 text-indigo-400" />
+                    AI 供应商配置
+                  </h3>
+                  <AISettings />
+                </div>
+              </div>
+            )}
             {activeTab === 'data-management' && <DataManager />}
             {activeTab === 'app-settings' && <GeneralSettings />}
             {activeTab === 'data-governance' && (

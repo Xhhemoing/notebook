@@ -4,7 +4,7 @@ import { BookOpen, BrainCircuit, MessageSquare, Network, PlusCircle, Settings, B
 import { clsx } from 'clsx';
 import { useState } from 'react';
 
-export type View = 'dashboard' | 'input' | 'graph' | 'memory' | 'mistakes' | 'chat' | 'settings' | 'review' | 'textbooks';
+export type View = 'dashboard' | 'input' | 'graph' | 'memory' | 'mistakes' | 'chat' | 'settings' | 'review' | 'textbooks' | 'resources';
 
 export function Sidebar({ currentView, setView }: { currentView: View; setView: (v: View) => void }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -12,6 +12,7 @@ export function Sidebar({ currentView, setView }: { currentView: View; setView: 
   const navItems = [
     { id: 'dashboard', label: '总览', icon: LayoutDashboard, color: 'text-blue-400' },
     { id: 'textbooks', label: '课本导入', icon: BookOpen, color: 'text-cyan-400' },
+    { id: 'resources', label: '学习资源库', icon: Database, color: 'text-teal-400' },
     { id: 'input', label: '录入记忆', icon: PlusCircle, color: 'text-emerald-400' },
     { id: 'graph', label: '知识图谱', icon: Network, color: 'text-purple-400' },
     { id: 'memory', label: '记忆库', icon: BrainCircuit, color: 'text-amber-400' },

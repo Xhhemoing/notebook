@@ -23,6 +23,8 @@ export default function AISettings() {
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(providers.length > 0 ? providers[0].id : null);
   const [showApiKey, setShowApiKey] = useState(false);
 
+  const [isFetching, setIsFetching] = useState(false);
+
   const selectedProvider = providers.find(p => p.id === selectedProviderId);
 
   const handleAddProvider = () => {
@@ -75,6 +77,84 @@ export default function AISettings() {
     const newModels = [...provider.models];
     newModels.splice(modelIndex, 1);
     updateProvider(providerId, { models: newModels });
+  };
+
+  const handleFetchModels = async (providerId: string) => {
+    const provider = providers.find(p => p.id === providerId);
+    if (!provider || !provider.baseUrl || !provider.apiKey) {
+      alert('请先填写接口地址和 API 密钥');
+      return;
+    }
+    
+    setIsFetching(true);
+    try {
+      const url = provider.baseUrl.endsWith('/') ? `${provider.baseUrl}models` : `${provider.baseUrl}/models`;
+      const res = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${provider.apiKey}`
+        }
+      });
+      
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      }
+      
+      const data = await res.json();
+      if (data && data.data && Array.isArray(data.data)) {
+        const newModels = data.data.map((m: any) => ({
+          id: m.id,
+          name: m.id
+        }));
+        
+        // Merge with existing models to avoid overwriting custom names
+        const existingModels = provider.models || [];
+        const mergedModels = [...existingModels];
+        
+        newModels.forEach((nm: any) => {
+          if (!existingModels.find(em => em.id === nm.id)) {
+            mergedModels.push(nm);
+          }
+        });
+        
+        updateProvider(providerId, { models: mergedModels });
+        alert(`成功获取 ${newModels.length} 个模型！`);
+      } else {
+        throw new Error('返回数据格式不正确，未找到 data 数组');
+      }
+    } catch (error: any) {
+      console.error('Fetch models failed:', error);
+      alert('获取模型失败: ' + error.message);
+    } finally {
+      setIsFetching(false);
+    }
+  };
+
+  const handleTestConnection = async (providerId: string) => {
+    const provider = providers.find(p => p.id === providerId);
+    if (!provider || !provider.baseUrl || !provider.apiKey) {
+      alert('请先填写接口地址和 API 密钥');
+      return;
+    }
+    
+    setIsFetching(true);
+    try {
+      const url = provider.baseUrl.endsWith('/') ? `${provider.baseUrl}models` : `${provider.baseUrl}/models`;
+      const res = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${provider.apiKey}`
+        }
+      });
+      
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      }
+      alert('连通性测试成功！');
+    } catch (error: any) {
+      console.error('Test connection failed:', error);
+      alert('连通性测试失败: ' + error.message);
+    } finally {
+      setIsFetching(false);
+    }
   };
 
   return (
@@ -164,9 +244,21 @@ export default function AISettings() {
               </div>
 
               <div className="flex items-center gap-3">
-                <button className="flex items-center gap-2 px-4 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-sm transition-colors">
+                <button 
+                  onClick={() => handleTestConnection(selectedProvider.id)}
+                  disabled={isFetching}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-sm transition-colors disabled:opacity-50"
+                >
                   <Activity className="w-4 h-4" />
                   连通性测试
+                </button>
+                <button 
+                  onClick={() => handleFetchModels(selectedProvider.id)}
+                  disabled={isFetching}
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 rounded-lg text-sm transition-colors disabled:opacity-50"
+                >
+                  <Download className="w-4 h-4" />
+                  获取模型列表
                 </button>
                 <button 
                   onClick={() => updateProvider(selectedProvider.id, { apiKey: '' })}

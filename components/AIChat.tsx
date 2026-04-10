@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useAppContext } from '@/lib/store';
-import { chatWithAI, searchMemoriesRAG, reorganizeMemories } from '@/lib/ai';
+import { chatWithAI, searchMemoriesRAG, reorganizeMemories, extractMemoryFromChat } from '@/lib/ai';
 import { Send, Bot, User, Loader2, Paperclip, X, Image as ImageIcon, BookOpen, UploadCloud, Search, Sparkles, Database, Settings2, RefreshCw, Wand2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import Markdown from 'react-markdown';
@@ -45,7 +45,15 @@ export function AIChat() {
   const [isDragging, setIsDragging] = useState(false);
   const [enableRAG, setEnableRAG] = useState(true);
   const [isReorganizing, setIsReorganizing] = useState(false);
+  const [showSkills, setShowSkills] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const SKILLS = [
+    { id: 'explain', name: '费曼技巧讲解', prompt: '请用费曼技巧，像教给5岁小孩一样向我解释这个概念：' },
+    { id: 'quiz', name: '出题测试', prompt: '请根据我们刚才的讨论，出3道选择题考考我。' },
+    { id: 'summarize', name: '总结提炼', prompt: '请将我们今天的讨论总结为3个核心记忆点。' },
+    { id: 'extract', name: '提取记忆', prompt: '请从我们刚才的对话中，提取出我需要记住的知识点或错题，并直接告诉我。' }
+  ];
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -123,6 +131,17 @@ export function AIChat() {
       
       const aiMsg: Message = { id: (Date.now() + 1).toString(), role: 'ai', content: response };
       setMessages(prev => [...prev, aiMsg]);
+
+      // Background memory extraction
+      extractMemoryFromChat(currentInput, response, state.currentSubject, state.settings)
+        .then(memory => {
+          if (memory) {
+            dispatch({ type: 'ADD_MEMORY', payload: memory });
+            // Optional: notify user or just silently add
+          }
+        })
+        .catch(err => console.error('Memory extraction failed:', err));
+
     } catch (error) {
       console.error('Chat error:', error);
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'ai', content: '抱歉，网络出现问题，请稍后再试。' }]);
@@ -181,7 +200,7 @@ export function AIChat() {
           else if (action === 'split') preview = op.newMemories?.[0]?.content || '';
           else if (action === 'update') preview = op.updates?.content || op.memoryId || '';
           else preview = op.content || '';
-          return `- **${action.toUpperCase()}**: ${preview.substring(0, 50)}...`;
+          return `- **${(action || '').toUpperCase()}**: ${preview.substring(0, 50)}...`;
         }).join('\n')}\n\n(手动整理功能正在完善中)` }]);
       }
     } catch (error) {
@@ -393,6 +412,38 @@ export function AIChat() {
               >
                 <Search className="w-4 h-4" />
               </button>
+
+              <div className="relative">
+                <button
+                  onClick={() => setShowSkills(!showSkills)}
+                  className="p-2 text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 transition-all rounded-lg"
+                  title="AI 技能"
+                >
+                  <Wand2 className="w-4 h-4" />
+                </button>
+                {showSkills && (
+                  <div className="absolute bottom-full left-0 mb-3 w-48 bg-slate-950 border border-slate-800 shadow-2xl rounded-xl p-2 z-50 animate-in fade-in slide-in-from-bottom-4">
+                    <div className="flex items-center justify-between mb-2 px-1">
+                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">AI SKILLS</span>
+                      <button onClick={() => setShowSkills(false)}><X className="w-3 h-3 text-slate-500 hover:text-slate-300" /></button>
+                    </div>
+                    <div className="space-y-1">
+                      {SKILLS.map(skill => (
+                        <button
+                          key={skill.id}
+                          onClick={() => {
+                            setInput(prev => prev + (prev ? '\n' : '') + skill.prompt);
+                            setShowSkills(false);
+                          }}
+                          className="w-full text-left px-2 py-1.5 rounded-lg text-xs text-slate-300 hover:bg-indigo-500/20 hover:text-indigo-300 transition-colors"
+                        >
+                          {skill.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
 
               <input
                 type="text"

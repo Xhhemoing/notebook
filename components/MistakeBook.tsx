@@ -261,11 +261,11 @@ export function MistakeBook() {
 
                       <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-800/50">
                         <div className="flex flex-wrap gap-2">
-                          {memory.knowledgeNodeIds.map(id => {
+                          {Array.from(new Set(memory.knowledgeNodeIds)).map((id, index) => {
                             const node = state.knowledgeNodes.find(n => n.id === id);
                             if (!node) return null;
                             return (
-                              <span key={id} className="px-2.5 py-1 bg-slate-800 text-slate-400 rounded-lg text-[10px] font-medium border border-slate-700">
+                              <span key={`${id}-${index}`} className="px-2.5 py-1 bg-slate-800 text-slate-400 rounded-lg text-[10px] font-medium border border-slate-700">
                                 {node.name}
                               </span>
                             );

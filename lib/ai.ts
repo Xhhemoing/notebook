@@ -419,6 +419,9 @@ export async function generateTextbookFramework(
   const prompt = `你是一个专业的教材分析专家。请根据以下课本的部分内容（前10页）和课本名称《${textbook.name}》，构建一个清晰的知识框架（树状结构）。
 科目：${textbook.subject}
 
+【重要：深度限制】
+请务必细化知识点，知识图谱的深度至少为3层，推荐深度为4到5层（例如：章 -> 节 -> 知识点 -> 核心概念 -> 考点）。不要只生成粗略的章节。
+
 请以JSON格式返回，包含一个 operations 数组，其中 action 为 'add'。
 每个节点包含：
 - name: 知识点名称
@@ -1009,6 +1012,9 @@ export async function reorganizeKnowledgeGraph(
 2. 发现缺失的关键概念，并添加新节点。
 3. 修正不合理的父子关系。
 
+【重要：深度限制】
+请务必细化知识点，知识图谱的深度至少为3层，推荐深度为4到5层（例如：章 -> 节 -> 知识点 -> 核心概念 -> 考点）。不要只生成粗略的章节。
+
 当前节点列表：
 ${nodes.map(n => `- ID: ${n.id}, Name: ${n.name}, ParentID: ${n.parentId || 'null'}`).join('\n')}
 
@@ -1394,6 +1400,66 @@ ${JSON.stringify(existingNodes.map(n => ({ id: n.id, name: n.name, parentId: n.p
     reasoning: parsed.reasoning || '',
     operations
   };
+}
+
+export async function extractMemoryFromChat(
+  userMessage: string,
+  aiResponse: string,
+  subject: Subject,
+  settings: Settings
+): Promise<Memory | null> {
+  const prompt = `
+请分析以下用户和AI的对话，判断是否包含值得记忆的知识点、错题、方法论或用户的学习偏好。
+如果包含，请提取为一个记忆条目。如果不包含（例如只是普通的寒暄或简单的确认），请返回空对象。
+
+用户说：${userMessage}
+AI回复：${aiResponse}
+
+请返回 JSON 格式：
+{
+  "shouldExtract": boolean,
+  "content": "提取的具体记忆内容（如果是知识点请精简，如果是错题请包含错误和正确解析）",
+  "functionType": "细碎记忆 | 体系框架 | 方法论 | 错题 | 学习偏好",
+  "purposeType": "记忆型 | 内化型 | 技能型"
+}
+`;
+
+  const { ai: client, modelName, isCustomOpenAI, customModel } = getAIClient(settings.chatModel, settings);
+
+  try {
+    let resultStr = '';
+    if (isCustomOpenAI && customModel) {
+      resultStr = await fetchOpenAI(customModel, prompt, undefined, 'json_object');
+    } else if (client) {
+      const response = await client.models.generateContent({
+        model: modelName,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: {
+          responseMimeType: 'application/json'
+        }
+      });
+      resultStr = response.text || '{}';
+    }
+
+    const parsed = JSON.parse(resultStr);
+    if (parsed.shouldExtract && parsed.content) {
+      return {
+        id: require('uuid').v4(),
+        subject,
+        content: parsed.content,
+        functionType: parsed.functionType || '细碎记忆',
+        purposeType: parsed.purposeType || '记忆型',
+        knowledgeNodeIds: [],
+        confidence: 0,
+        mastery: 0,
+        createdAt: Date.now(),
+        sourceType: 'text'
+      };
+    }
+  } catch (e) {
+    console.error('Failed to extract memory from chat:', e);
+  }
+  return null;
 }
 
 export type QuizQuestion = {

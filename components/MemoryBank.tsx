@@ -315,7 +315,7 @@ export function MemoryBank() {
           className="px-3 py-2 bg-slate-900/50 border border-slate-900 rounded-lg text-[10px] font-bold uppercase tracking-widest text-slate-400 focus:ring-1 focus:ring-blue-500/50 outline-none cursor-pointer hover:bg-slate-900 transition-all"
         >
           <option value="all">所有功能类型</option>
-          {functionTypes.map(t => <option key={t} value={t}>{t.toUpperCase()}</option>)}
+          {functionTypes.filter(Boolean).map((t, i) => <option key={`${t}-${i}`} value={t}>{(t || '').toUpperCase()}</option>)}
         </select>
         <select
           value={filterPurpose}
@@ -323,7 +323,7 @@ export function MemoryBank() {
           className="px-3 py-2 bg-slate-900/50 border border-slate-900 rounded-lg text-[10px] font-bold uppercase tracking-widest text-slate-400 focus:ring-1 focus:ring-blue-500/50 outline-none cursor-pointer hover:bg-slate-900 transition-all"
         >
           <option value="all">所有用途类型</option>
-          {purposeTypes.map(t => <option key={t} value={t}>{t.toUpperCase()}</option>)}
+          {purposeTypes.filter(Boolean).map((t, i) => <option key={`${t}-${i}`} value={t}>{(t || '').toUpperCase()}</option>)}
         </select>
       </div>
 
@@ -505,7 +505,7 @@ export function MemoryBank() {
                                 const node = state.knowledgeNodes.find(n => n.id === id);
                                 return node ? (
                                   <span key={id} className="px-2 py-1 bg-slate-950 text-slate-500 rounded-lg text-[8px] font-bold border border-slate-900 whitespace-nowrap">
-                                    {node.name.toUpperCase()}
+                                    {(node.name || '').toUpperCase()}
                                   </span>
                                 ) : null;
                               })}

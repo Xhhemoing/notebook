@@ -149,7 +149,8 @@ const initialState: AppState = {
     maxReviewDifficulty: 10,
   },
   logs: [],
-  inputHistory: []
+  inputHistory: [],
+  resources: []
 };
 
 function reducer(state: AppState, action: Action): AppState {
@@ -229,7 +230,8 @@ function reducer(state: AppState, action: Action): AppState {
         logs: action.payload.logs || [],
         textbooks: action.payload.textbooks || [],
         reviewPlans: action.payload.reviewPlans || [],
-        inputHistory: action.payload.inputHistory || []
+        inputHistory: action.payload.inputHistory || [],
+        resources: action.payload.resources || []
       };
     case 'ADD_LOG':
       const logWithMetadata = {
@@ -300,6 +302,12 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         ...action.payload
       };
+    case 'ADD_RESOURCE':
+      return { ...state, resources: [action.payload, ...state.resources] };
+    case 'DELETE_RESOURCE':
+      return { ...state, resources: state.resources.filter(r => r.id !== action.payload) };
+    case 'SET_RESOURCES':
+      return { ...state, resources: action.payload };
     default:
       return state;
   }

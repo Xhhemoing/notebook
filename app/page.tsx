@@ -13,6 +13,7 @@ import { AIChat } from '@/components/AIChat';
 import { Settings } from '@/components/Settings';
 import { ReviewSection } from '@/components/ReviewSection';
 import { TextbookModule } from '@/components/TextbookModule';
+import { ResourceLibrary } from '@/components/ResourceLibrary';
 import { clsx } from 'clsx';
 import { useEffect } from 'react';
 
@@ -38,6 +39,7 @@ function MainLayout({ currentView, setCurrentView }: { currentView: View, setCur
         <div className="flex-1 overflow-y-auto relative">
           {currentView === 'dashboard' && <Dashboard />}
           {currentView === 'textbooks' && <TextbookModule />}
+          {currentView === 'resources' && <ResourceLibrary />}
           {currentView === 'input' && (
             <div className="max-w-6xl mx-auto h-full">
               <InputSection />
