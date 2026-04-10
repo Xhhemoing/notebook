@@ -52,7 +52,8 @@ export function AIChat() {
     { id: 'explain', name: '费曼技巧讲解', prompt: '请用费曼技巧，像教给5岁小孩一样向我解释这个概念：' },
     { id: 'quiz', name: '出题测试', prompt: '请根据我们刚才的讨论，出3道选择题考考我。' },
     { id: 'summarize', name: '总结提炼', prompt: '请将我们今天的讨论总结为3个核心记忆点。' },
-    { id: 'extract', name: '提取记忆', prompt: '请从我们刚才的对话中，提取出我需要记住的知识点或错题，并直接告诉我。' }
+    { id: 'extract', name: '提取记忆', prompt: '请从我们刚才的对话中，提取出我需要记住的知识点或错题，并直接告诉我。' },
+    { id: 'vocab_summary', name: '词汇归纳', prompt: '请帮我把记忆库中的英语生词、同义词、熟词生义进行一次系统的归纳和串联讲解。' }
   ];
   const fileInputRef = useRef<HTMLInputElement>(null);
 

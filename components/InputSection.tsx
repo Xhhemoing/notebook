@@ -557,52 +557,86 @@ export function InputSection() {
                       placeholder="补充说明"
                     />
                   )}
-                  {(item.isMistake || isMistake) && (
+                  {(item.type === 'qa' || item.isMistake || isMistake) && (
                     <div className="space-y-3">
-                      <textarea
-                        value={item.visualDescription || ''}
-                        onChange={(e) => {
-                          const newItems = [...pendingReview.parsedItems];
-                          newItems[index].visualDescription = e.target.value;
-                          setPendingReview({ ...pendingReview, parsedItems: newItems });
-                        }}
-                        className="w-full p-2 text-sm border border-slate-700 bg-slate-800 text-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none resize-y"
-                        rows={2}
-                        placeholder="图片视觉描述 (如：包含一个抛物线 y=x^2 和一条直线...)"
-                      />
-                      <textarea
-                        value={item.correctAnswer || ''}
-                        onChange={(e) => {
-                          const newItems = [...pendingReview.parsedItems];
-                          newItems[index].correctAnswer = e.target.value;
-                          setPendingReview({ ...pendingReview, parsedItems: newItems });
-                        }}
-                        className="w-full p-2 text-sm border border-emerald-900/50 bg-emerald-900/20 text-emerald-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none resize-y"
-                        rows={2}
-                        placeholder="标准答案 (AI提取或手动输入)"
-                      />
-                      <textarea
-                        value={item.wrongAnswer || ''}
-                        onChange={(e) => {
-                          const newItems = [...pendingReview.parsedItems];
-                          newItems[index].wrongAnswer = e.target.value;
-                          setPendingReview({ ...pendingReview, parsedItems: newItems });
-                        }}
-                        className="w-full p-2 text-sm border border-red-900/50 bg-red-900/20 text-red-200 rounded-lg focus:ring-2 focus:ring-red-500 outline-none resize-y"
-                        rows={2}
-                        placeholder="你的错误答案 (原笔迹提取)"
-                      />
-                      <textarea
-                        value={item.errorReason || ''}
-                        onChange={(e) => {
-                          const newItems = [...pendingReview.parsedItems];
-                          newItems[index].errorReason = e.target.value;
-                          setPendingReview({ ...pendingReview, parsedItems: newItems });
-                        }}
-                        className="w-full p-2 text-sm border border-orange-900/50 bg-orange-900/20 text-orange-200 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none resize-y"
-                        rows={2}
-                        placeholder="错误原因分析 (如：概念混淆、计算错误)"
-                      />
+                      {item.visualDescription && (
+                        <textarea
+                          value={item.visualDescription || ''}
+                          onChange={(e) => {
+                            const newItems = [...pendingReview.parsedItems];
+                            newItems[index].visualDescription = e.target.value;
+                            setPendingReview({ ...pendingReview, parsedItems: newItems });
+                          }}
+                          className="w-full p-2 text-sm border border-slate-700 bg-slate-800 text-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none resize-y"
+                          rows={2}
+                          placeholder="图片视觉描述 (如：包含一个抛物线 y=x^2 和一条直线...)"
+                        />
+                      )}
+                      {item.correctAnswer && (
+                        <textarea
+                          value={item.correctAnswer || ''}
+                          onChange={(e) => {
+                            const newItems = [...pendingReview.parsedItems];
+                            newItems[index].correctAnswer = e.target.value;
+                            setPendingReview({ ...pendingReview, parsedItems: newItems });
+                          }}
+                          className="w-full p-2 text-sm border border-emerald-900/50 bg-emerald-900/20 text-emerald-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none resize-y"
+                          rows={2}
+                          placeholder="标准答案 (AI提取或手动输入)"
+                        />
+                      )}
+                      {(item.wrongAnswer || item.errorReason) && (
+                        <div className="p-3 bg-red-900/10 border border-red-900/30 rounded-lg space-y-3">
+                          <div className="text-xs font-bold text-red-400 uppercase tracking-widest">错解与分析</div>
+                          {item.wrongAnswer && (
+                            <textarea
+                              value={item.wrongAnswer || ''}
+                              onChange={(e) => {
+                                const newItems = [...pendingReview.parsedItems];
+                                newItems[index].wrongAnswer = e.target.value;
+                                setPendingReview({ ...pendingReview, parsedItems: newItems });
+                              }}
+                              className="w-full p-2 text-sm border border-red-900/50 bg-red-900/20 text-red-200 rounded-lg focus:ring-2 focus:ring-red-500 outline-none resize-y"
+                              rows={2}
+                              placeholder="你的错误答案 (原笔迹提取)"
+                            />
+                          )}
+                          {item.errorReason && (
+                            <textarea
+                              value={item.errorReason || ''}
+                              onChange={(e) => {
+                                const newItems = [...pendingReview.parsedItems];
+                                newItems[index].errorReason = e.target.value;
+                                setPendingReview({ ...pendingReview, parsedItems: newItems });
+                              }}
+                              className="w-full p-2 text-sm border border-orange-900/50 bg-orange-900/20 text-orange-200 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none resize-y"
+                              rows={2}
+                              placeholder="错误原因分析 (如：概念混淆、计算错误)"
+                            />
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {item.type === 'vocabulary' && item.vocabularyData && (
+                    <div className="space-y-2 p-3 bg-teal-900/10 border border-teal-900/30 rounded-lg text-sm">
+                      <div className="text-xs font-bold text-teal-400 uppercase tracking-widest mb-2">词汇解析</div>
+                      {item.vocabularyData.meaning && (
+                        <div className="flex gap-2"><span className="text-teal-500/70 shrink-0">含义:</span><span className="text-teal-100">{item.vocabularyData.meaning}</span></div>
+                      )}
+                      {item.vocabularyData.context && (
+                        <div className="flex gap-2"><span className="text-teal-500/70 shrink-0">语境:</span><span className="text-teal-100 italic">{item.vocabularyData.context}</span></div>
+                      )}
+                      {item.vocabularyData.usage && (
+                        <div className="flex gap-2"><span className="text-teal-500/70 shrink-0">用法:</span><span className="text-teal-100">{item.vocabularyData.usage}</span></div>
+                      )}
+                      {item.vocabularyData.mnemonics && (
+                        <div className="flex gap-2"><span className="text-teal-500/70 shrink-0">助记:</span><span className="text-teal-100">{item.vocabularyData.mnemonics}</span></div>
+                      )}
+                      {item.vocabularyData.synonyms && item.vocabularyData.synonyms.length > 0 && (
+                        <div className="flex gap-2"><span className="text-teal-500/70 shrink-0">同义词:</span><span className="text-teal-100">{item.vocabularyData.synonyms.join(', ')}</span></div>
+                      )}
                     </div>
                   )}
                   <div className="flex items-center gap-4 text-xs flex-wrap">

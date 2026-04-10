@@ -42,6 +42,14 @@ export interface Memory {
   analysisProcess?: string;
   fsrs?: FSRSData;
   embedding?: number[]; // For RAG
+  type?: 'concept' | 'qa' | 'vocabulary';
+  vocabularyData?: {
+    context?: string;
+    meaning?: string;
+    usage?: string;
+    mnemonics?: string;
+    synonyms?: string[];
+  };
 }
 
 export interface KnowledgeNode {
