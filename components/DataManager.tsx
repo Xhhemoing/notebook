@@ -12,7 +12,7 @@ export function DataManager() {
   const [searchQuery, setSearchQuery] = useState('');
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [logTypeFilter, setLogTypeFilter] = useState<string>('all');
-  const [collapsedItems, setCollapsedItems] = useState<Set<string>>(new Set());
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
   const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
@@ -21,14 +21,18 @@ export function DataManager() {
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [editingNodeContent, setEditingNodeContent] = useState('');
 
-  const toggleCollapse = (id: string) => {
-    const newCollapsed = new Set(collapsedItems);
-    if (newCollapsed.has(id)) {
-      newCollapsed.delete(id);
+  const [showBatchEditModal, setShowBatchEditModal] = useState(false);
+  const [batchEditSubject, setBatchEditSubject] = useState<string>('');
+  const [batchEditFunctionType, setBatchEditFunctionType] = useState<string>('');
+
+  const toggleExpand = (id: string) => {
+    const newExpanded = new Set(expandedItems);
+    if (newExpanded.has(id)) {
+      newExpanded.delete(id);
     } else {
-      newCollapsed.add(id);
+      newExpanded.add(id);
     }
-    setCollapsedItems(newCollapsed);
+    setExpandedItems(newExpanded);
   };
 
   const toggleSelect = (id: string) => {
@@ -61,19 +65,78 @@ export function DataManager() {
     }
   };
 
-  const handleExportLogs = () => {
-    if (selectedIds.size === 0) {
-      alert('请先选择要导出的日志。');
-      return;
+  const handleExportData = () => {
+    let dataToExport: any = [];
+    let filename = 'export.json';
+
+    if (selectedIds.size > 0) {
+      // Export selected items in current tab
+      if (activeTab === 'memories') dataToExport = state.memories.filter(m => !m.isMistake && selectedIds.has(m.id));
+      else if (activeTab === 'mistakes') dataToExport = state.memories.filter(m => m.isMistake && selectedIds.has(m.id));
+      else if (activeTab === 'rag') dataToExport = state.knowledgeNodes.filter(n => selectedIds.has(n.id));
+      else if (activeTab === 'textbooks') dataToExport = state.textbooks.filter(t => selectedIds.has(t.id));
+      else if (activeTab === 'resources') dataToExport = (state.resources || []).filter(r => selectedIds.has(r.id));
+      else if (activeTab === 'logs') dataToExport = state.logs.filter(l => selectedIds.has(l.id));
+      filename = `${activeTab}_export.json`;
+    } else {
+      // Export all data in current tab
+      if (activeTab === 'memories') dataToExport = state.memories.filter(m => !m.isMistake);
+      else if (activeTab === 'mistakes') dataToExport = state.memories.filter(m => m.isMistake);
+      else if (activeTab === 'rag') dataToExport = state.knowledgeNodes;
+      else if (activeTab === 'textbooks') dataToExport = state.textbooks;
+      else if (activeTab === 'resources') dataToExport = state.resources || [];
+      else if (activeTab === 'logs') dataToExport = state.logs;
+      filename = `all_${activeTab}_export.json`;
     }
-    const logsToExport = state.logs.filter(l => selectedIds.has(l.id));
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(logsToExport, null, 2));
+
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(dataToExport, null, 2));
     const downloadAnchorNode = document.createElement('a');
-    downloadAnchorNode.setAttribute("href",     dataStr);
-    downloadAnchorNode.setAttribute("download", "ai_logs_export.json");
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", filename);
     document.body.appendChild(downloadAnchorNode);
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
+  };
+
+  const handleExportAll = () => {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", "full_backup.json");
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+  };
+
+  const handleBatchEditSubmit = () => {
+    if (selectedIds.size === 0) return;
+    
+    if (activeTab === 'memories' || activeTab === 'mistakes') {
+      selectedIds.forEach(id => {
+        const memory = state.memories.find(m => m.id === id);
+        if (memory) {
+          const updatedMemory = { ...memory };
+          if (batchEditSubject) updatedMemory.subject = batchEditSubject as Subject;
+          if (batchEditFunctionType) updatedMemory.functionType = batchEditFunctionType;
+          dispatch({ type: 'UPDATE_MEMORY', payload: updatedMemory });
+        }
+      });
+    } else if (activeTab === 'rag') {
+      selectedIds.forEach(id => {
+        const node = state.knowledgeNodes.find(n => n.id === id);
+        if (node) {
+          const updatedNode = { ...node };
+          if (batchEditSubject) updatedNode.subject = batchEditSubject as Subject;
+          dispatch({ type: 'UPDATE_NODE', payload: updatedNode });
+        }
+      });
+    }
+    
+    setShowBatchEditModal(false);
+    setBatchEditSubject('');
+    setBatchEditFunctionType('');
+    setSelectedIds(new Set());
+    alert('批量修改成功！');
   };
 
   const handleClearCache = () => {
@@ -226,6 +289,13 @@ export function DataManager() {
         </div>
         <div className="flex gap-2">
           <button
+            onClick={handleExportAll}
+            className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium transition-colors"
+          >
+            <Database className="w-4 h-4" />
+            导出全部数据
+          </button>
+          <button
             onClick={handleDeleteDuplicates}
             className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition-colors"
           >
@@ -343,12 +413,19 @@ export function DataManager() {
               )}
               {selectedIds.size > 0 && (
                 <>
-                  {activeTab === 'logs' && (
+                  <button
+                    onClick={handleExportData}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all"
+                  >
+                    导出 ({selectedIds.size})
+                  </button>
+                  {(activeTab === 'memories' || activeTab === 'mistakes' || activeTab === 'rag') && (
                     <button
-                      onClick={handleExportLogs}
-                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all"
+                      onClick={() => setShowBatchEditModal(true)}
+                      className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all"
                     >
-                      导出 ({selectedIds.size})
+                      <Edit className="w-4 h-4" />
+                      批量编辑 ({selectedIds.size})
                     </button>
                   )}
                   <button
@@ -359,6 +436,14 @@ export function DataManager() {
                     批量删除 ({selectedIds.size})
                   </button>
                 </>
+              )}
+              {selectedIds.size === 0 && (
+                <button
+                  onClick={handleExportData}
+                  className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold uppercase tracking-widest transition-all"
+                >
+                  导出当前板块
+                </button>
               )}
               {activeTab === 'memories' && subjectFilter !== 'all' && (
             <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3">
@@ -407,7 +492,7 @@ export function DataManager() {
                 </button>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0" onClick={() => toggleCollapse(m.id)}>
+                    <div className="flex-1 min-w-0" onClick={() => toggleExpand(m.id)}>
                       <div className="flex items-center gap-2 mb-2 cursor-pointer">
                         <span className="px-2 py-0.5 bg-indigo-500/10 text-indigo-400 rounded text-[10px] font-bold uppercase tracking-widest">
                           {m.subject}
@@ -428,7 +513,7 @@ export function DataManager() {
                           </div>
                         </div>
                       ) : (
-                        <p className={clsx("text-sm text-slate-300", collapsedItems.has(m.id) ? "line-clamp-1" : "")}>{m.content}</p>
+                        <p className={clsx("text-sm text-slate-300", !expandedItems.has(m.id) ? "line-clamp-1" : "")}>{m.content}</p>
                       )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -567,7 +652,7 @@ export function DataManager() {
                 </button>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-4">
-                    <div className="flex-1 min-w-0" onClick={() => toggleCollapse(node.id)}>
+                    <div className="flex-1 min-w-0" onClick={() => toggleExpand(node.id)}>
                       <div className="flex items-center gap-2 mb-1 cursor-pointer">
                         <span className="px-2 py-0.5 bg-purple-500/10 text-purple-400 rounded text-[10px] font-bold uppercase tracking-widest">
                           {node.subject}
@@ -585,7 +670,7 @@ export function DataManager() {
                           <button onClick={(e) => { e.stopPropagation(); setEditingNodeId(null); }} className="px-3 py-1.5 bg-slate-700 text-white text-xs font-bold rounded-lg hover:bg-slate-600">取消</button>
                         </div>
                       ) : (
-                        <p className={clsx("text-sm font-medium text-slate-200", collapsedItems.has(node.id) ? "truncate" : "")}>{node.name}</p>
+                        <p className={clsx("text-sm font-medium text-slate-200", !expandedItems.has(node.id) ? "truncate" : "")}>{node.name}</p>
                       )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -640,13 +725,13 @@ export function DataManager() {
                 >
                   {selectedIds.has(textbook.id) ? <CheckSquare className="w-5 h-5 text-indigo-500" /> : <Square className="w-5 h-5" />}
                 </button>
-                <div className="flex items-center gap-4 flex-1 min-w-0" onClick={() => toggleCollapse(textbook.id)}>
+                <div className="flex items-center gap-4 flex-1 min-w-0" onClick={() => toggleExpand(textbook.id)}>
                   <div className="w-10 h-10 bg-cyan-500/10 rounded-xl flex items-center justify-center shrink-0 border border-cyan-500/20">
                     <FileText className="w-5 h-5 text-cyan-400" />
                   </div>
                   <div className="cursor-pointer">
                     <h4 className="text-sm font-bold text-slate-200">{textbook.name}</h4>
-                    <p className={clsx("text-xs text-slate-500 mt-1 uppercase tracking-widest", collapsedItems.has(textbook.id) ? "hidden" : "block")}>
+                    <p className={clsx("text-xs text-slate-500 mt-1 uppercase tracking-widest", !expandedItems.has(textbook.id) ? "hidden" : "block")}>
                       {textbook.subject} · {textbook.pages.length} 页 · {new Date(textbook.createdAt).toLocaleDateString()}
                     </p>
                   </div>
@@ -690,13 +775,13 @@ export function DataManager() {
                 >
                   {selectedIds.has(resource.id) ? <CheckSquare className="w-5 h-5 text-indigo-500" /> : <Square className="w-5 h-5" />}
                 </button>
-                <div className="flex items-center gap-4 flex-1 min-w-0" onClick={() => toggleCollapse(resource.id)}>
+                <div className="flex items-center gap-4 flex-1 min-w-0" onClick={() => toggleExpand(resource.id)}>
                   <div className="w-10 h-10 bg-teal-500/10 rounded-xl flex items-center justify-center shrink-0 border border-teal-500/20">
                     <Database className="w-5 h-5 text-teal-400" />
                   </div>
                   <div className="cursor-pointer">
                     <h4 className="text-sm font-bold text-slate-200">{resource.name}</h4>
-                    <p className={clsx("text-xs text-slate-500 mt-1 uppercase tracking-widest", collapsedItems.has(resource.id) ? "hidden" : "block")}>
+                    <p className={clsx("text-xs text-slate-500 mt-1 uppercase tracking-widest", !expandedItems.has(resource.id) ? "hidden" : "block")}>
                       {resource.subject} · {resource.isFolder ? '文件夹' : '文件'} · {new Date(resource.createdAt).toLocaleDateString()}
                     </p>
                   </div>
@@ -744,7 +829,7 @@ export function DataManager() {
                 >
                   {selectedIds.has(log.id) ? <CheckSquare className="w-5 h-5 text-indigo-500" /> : <Square className="w-5 h-5" />}
                 </button>
-                <div className="flex-1 min-w-0" onClick={() => toggleCollapse(log.id)}>
+                <div className="flex-1 min-w-0" onClick={() => toggleExpand(log.id)}>
                   <div className="flex items-center gap-2 mb-2 cursor-pointer">
                     <span className="px-2 py-0.5 bg-blue-500/10 text-blue-400 rounded text-[10px] font-bold uppercase tracking-widest">
                       {log.type}
@@ -752,7 +837,7 @@ export function DataManager() {
                     <span className="text-xs text-slate-500">{new Date(log.timestamp).toLocaleString()}</span>
                     <span className="text-xs text-slate-600 ml-auto">{log.model}</span>
                   </div>
-                  {collapsedItems.has(log.id) ? (
+                  {!expandedItems.has(log.id) ? (
                     <p className="text-sm text-slate-300 line-clamp-1">{log.prompt}</p>
                   ) : (
                     <div className="space-y-4">
@@ -775,6 +860,59 @@ export function DataManager() {
           </div>
         )}
       </div>
+
+      {/* Batch Edit Modal */}
+      {showBatchEditModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl">
+            <h3 className="text-lg font-bold text-white mb-4">批量编辑 ({selectedIds.size} 项)</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">修改学科</label>
+                <select
+                  value={batchEditSubject}
+                  onChange={(e) => setBatchEditSubject(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="">不修改</option>
+                  {subjects.map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+              {(activeTab === 'memories' || activeTab === 'mistakes') && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-1.5">修改功能类型</label>
+                  <select
+                    value={batchEditFunctionType}
+                    onChange={(e) => setBatchEditFunctionType(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="">不修改</option>
+                    {functionTypes.map(ft => (
+                      <option key={ft} value={ft}>{ft}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => setShowBatchEditModal(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-bold transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleBatchEditSubmit}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold transition-colors"
+              >
+                确认修改
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

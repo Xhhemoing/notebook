@@ -637,8 +637,20 @@ async function fetchOpenAI(customModel: CustomModel, prompt: string, base64Image
   });
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(`AI Proxy error: ${error.error || 'Unknown error'}`);
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      const error = await response.json();
+      throw new Error(`AI Proxy error: ${error.error || 'Unknown error'}`);
+    } else {
+      const text = await response.text();
+      throw new Error(`AI Proxy error: ${response.status} ${text.substring(0, 100)}`);
+    }
+  }
+
+  const contentType = response.headers.get('content-type');
+  if (!contentType || !contentType.includes('application/json')) {
+    const text = await response.text();
+    throw new Error(`AI Proxy expected JSON but got ${contentType}: ${text.substring(0, 100)}`);
   }
 
   const data = await response.json();

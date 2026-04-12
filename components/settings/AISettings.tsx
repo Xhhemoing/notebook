@@ -99,6 +99,11 @@ export default function AISettings() {
         throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       }
       
+      const contentType = res.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        throw new Error(`Expected JSON but got ${contentType}`);
+      }
+      
       const data = await res.json();
       if (data && data.data && Array.isArray(data.data)) {
         const newModels = data.data.map((m: any) => ({

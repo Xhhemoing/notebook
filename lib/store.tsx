@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useReducer, useEffect, useState } from 'react';
+import React, { createContext, useContext, useReducer, useEffect, useState, useRef } from 'react';
 import { AppState, Action, Subject, KnowledgeNode, Memory } from './types';
 import { v4 as uuidv4 } from 'uuid';
 import { openDB } from 'idb';
@@ -76,39 +76,50 @@ export async function syncWithD1(state: AppState, dispatch: React.Dispatch<Actio
     // 1. Pull incremental changes
     const pullRes = await fetch('/api/sync', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'pull', payload: { lastSynced: state.lastSynced || 0 } })
     });
     
     if (pullRes.ok) {
-      const { data, serverTime } = await pullRes.json();
-      if (data) {
-        if (data.memories?.length > 0) dispatch({ type: 'BATCH_ADD_MEMORIES', payload: data.memories });
-        if (data.knowledgeNodes?.length > 0) dispatch({ type: 'BATCH_ADD_NODES', payload: data.knowledgeNodes });
-        dispatch({ type: 'SET_LAST_SYNC', payload: serverTime });
+      const contentType = pullRes.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        const { data, serverTime } = await pullRes.json();
+        if (data) {
+          if (data.memories?.length > 0) dispatch({ type: 'BATCH_ADD_MEMORIES', payload: data.memories });
+          if (data.knowledgeNodes?.length > 0) dispatch({ type: 'BATCH_ADD_NODES', payload: data.knowledgeNodes });
+          dispatch({ type: 'SET_LAST_SYNC', payload: serverTime });
+        }
+      } else {
+        console.warn('D1 Sync Pull: Expected JSON but got', contentType);
       }
+    } else {
+      console.warn('D1 Sync Pull failed with status:', pullRes.status);
     }
 
-    // 2. Push local changes (simplified for now: push all if lastSynced is 0, otherwise just push recent)
-    // In a real incremental sync, we'd track 'updatedAt' locally too.
+    // 2. Push local changes
     const pushMemories = state.memories.filter(m => m.createdAt > (state.lastSynced || 0));
     if (pushMemories.length > 0) {
-      await fetch('/api/sync', {
+      const pushRes = await fetch('/api/sync', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'push_memories', payload: pushMemories })
       });
+      if (!pushRes.ok) console.warn('D1 Sync Push Memories failed:', pushRes.status);
     }
 
     const pushNodes = state.knowledgeNodes.filter(n => (n as any).updatedAt > (state.lastSynced || 0));
     if (pushNodes.length > 0) {
-      await fetch('/api/sync', {
+      const pushRes = await fetch('/api/sync', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'push_nodes', payload: pushNodes })
       });
+      if (!pushRes.ok) console.warn('D1 Sync Push Nodes failed:', pushRes.status);
     }
 
   } catch (e) {
     console.error('D1 Sync failed', e);
-    throw e;
+    // Don't throw to prevent crashing the UI, just log it
   }
 }
 
@@ -408,14 +419,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state, isMounted]);
 
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
   useEffect(() => {
     if (isMounted && state.settings.enableAutoSync && state.settings.syncInterval > 0) {
       const interval = setInterval(() => {
-        syncWithD1(state, dispatch).catch(() => {});
+        syncWithD1(stateRef.current, dispatch).catch(() => {});
       }, state.settings.syncInterval * 1000);
       return () => clearInterval(interval);
     }
-  }, [isMounted, state.settings.enableAutoSync, state.settings.syncInterval, state.lastSynced]);
+  }, [isMounted, state.settings.enableAutoSync, state.settings.syncInterval, dispatch]);
 
   if (!isMounted) return null; // Prevent hydration mismatch
 
