@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '@/lib/store';
-import { Shield, Trash2, RefreshCw, AlertTriangle, Sparkles, ShieldAlert, Filter, Database, Search, Zap, Loader2 } from 'lucide-react';
+import { Shield, Trash2, RefreshCw, AlertTriangle, Sparkles, ShieldAlert, Filter, Database, Search, Zap, Loader2, X } from 'lucide-react';
 import { Memory, KnowledgeNode, Subject } from '@/lib/types';
 import clsx from 'clsx';
 import { v4 as uuidv4 } from 'uuid';
@@ -12,6 +12,15 @@ export default function DataGovernanceSettings() {
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [isDeepScanning, setIsDeepScanning] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [modalConfig, setModalConfig] = useState<{ isOpen: boolean, title: string, message: string, type: 'alert' | 'confirm', onConfirm?: () => void }>({ isOpen: false, title: '', message: '', type: 'alert' });
+
+  const showAlert = (title: string, message: string) => {
+    setModalConfig({ isOpen: true, title, message, type: 'alert' });
+  };
+
+  const showConfirm = (title: string, message: string, onConfirm: () => void) => {
+    setModalConfig({ isOpen: true, title, message, type: 'confirm', onConfirm });
+  };
 
   const subjects = Array.from(new Set([
     ...state.memories.map(m => m.subject),
@@ -80,18 +89,18 @@ export default function DataGovernanceSettings() {
 
   const handleDeduplicate = () => {
     if (duplicates.memories.length === 0 && duplicates.nodes.length === 0) {
-      alert('未发现冗余数据。');
+      showAlert('提示', '未发现冗余数据。');
       return;
     }
-    if (confirm(`发现 ${duplicates.memories.length} 条冗余记忆和 ${duplicates.nodes.length} 个冗余知识节点。是否自动清理？`)) {
+    showConfirm('清理冗余数据', `发现 ${duplicates.memories.length} 条冗余记忆和 ${duplicates.nodes.length} 个冗余知识节点。是否自动清理？`, () => {
       if (duplicates.memories.length > 0) {
         dispatch({ type: 'BATCH_DELETE_MEMORIES', payload: duplicates.memories.map(m => m.id) });
       }
       if (duplicates.nodes.length > 0) {
         dispatch({ type: 'BATCH_DELETE_NODES', payload: duplicates.nodes.map(n => n.id) });
       }
-      alert('清理完成。');
-    }
+      showAlert('成功', '清理完成。');
+    });
   };
 
   const handleFixGraph = () => {
@@ -99,73 +108,73 @@ export default function DataGovernanceSettings() {
     const brokenNodes = state.knowledgeNodes.filter(n => n.parentId && !nodeIds.has(n.parentId));
     
     if (brokenNodes.length === 0) {
-      alert('未发现异常节点。');
+      showAlert('提示', '未发现异常节点。');
       return;
     }
 
-    if (confirm(`发现 ${brokenNodes.length} 个异常节点（父节点不存在），是否修复？`)) {
+    showConfirm('修复异常节点', `发现 ${brokenNodes.length} 个异常节点（父节点不存在），是否修复？`, () => {
       brokenNodes.forEach(node => {
         dispatch({ type: 'UPDATE_NODE', payload: { ...node, parentId: null } });
       });
-      alert('修复完成。');
-    }
+      showAlert('成功', '修复完成。');
+    });
   };
 
   const handleCleanupEmptyTextbooks = () => {
     const empty = state.textbooks.filter(t => t.pages.length === 0);
     if (empty.length === 0) {
-      alert('未发现空课本。');
+      showAlert('提示', '未发现空课本。');
       return;
     }
-    if (confirm(`发现 ${empty.length} 本空课本（无页面）。是否删除？`)) {
+    showConfirm('清理空课本', `发现 ${empty.length} 本空课本（无页面）。是否删除？`, () => {
       dispatch({ type: 'BATCH_DELETE_TEXTBOOKS', payload: empty.map(t => t.id) });
-      alert('删除完成。');
-    }
+      showAlert('成功', '删除完成。');
+    });
   };
 
   const handleDeleteSubjectData = () => {
     if (subjectFilter === 'all') {
-      alert('请先选择一个具体学科。');
+      showAlert('提示', '请先选择一个具体学科。');
       return;
     }
-    if (confirm(`【危险操作】确定要删除【${subjectFilter}】学科下的所有数据吗？`)) {
+    showConfirm('危险操作', `确定要删除【${subjectFilter}】学科下的所有数据吗？`, () => {
       dispatch({ type: 'DELETE_SUBJECT_DATA', payload: { subject: subjectFilter as Subject } });
-      alert(`【${subjectFilter}】学科数据已清空。`);
-    }
+      showAlert('成功', `【${subjectFilter}】学科数据已清空。`);
+    });
   };
 
   const handleDeleteSubjectNodes = () => {
     if (subjectFilter === 'all') return;
-    if (confirm(`确定要删除【${subjectFilter}】学科下的所有知识图谱节点吗？`)) {
+    showConfirm('删除知识图谱', `确定要删除【${subjectFilter}】学科下的所有知识图谱节点吗？`, () => {
       dispatch({ type: 'DELETE_SUBJECT_NODES', payload: { subject: subjectFilter as Subject } });
-      alert(`【${subjectFilter}】学科知识图谱已清空。`);
-    }
+      showAlert('成功', `【${subjectFilter}】学科知识图谱已清空。`);
+    });
   };
 
   const handleDeleteSubjectMistakes = () => {
     if (subjectFilter === 'all') return;
-    if (confirm(`确定要删除【${subjectFilter}】学科下的所有错题记录吗？`)) {
+    showConfirm('删除错题记录', `确定要删除【${subjectFilter}】学科下的所有错题记录吗？`, () => {
       dispatch({ type: 'DELETE_SUBJECT_MISTAKES', payload: { subject: subjectFilter as Subject } });
-      alert(`【${subjectFilter}】学科错题记录已清空。`);
-    }
+      showAlert('成功', `【${subjectFilter}】学科错题记录已清空。`);
+    });
   };
 
   const handleDeleteSubjectTextbooks = () => {
     if (subjectFilter === 'all') return;
-    if (confirm(`确定要删除【${subjectFilter}】学科下的所有课本吗？`)) {
+    showConfirm('删除课本', `确定要删除【${subjectFilter}】学科下的所有课本吗？`, () => {
       dispatch({ type: 'DELETE_SUBJECT_TEXTBOOKS', payload: { subject: subjectFilter as Subject } });
-      alert(`【${subjectFilter}】学科课本已清空。`);
-    }
+      showAlert('成功', `【${subjectFilter}】学科课本已清空。`);
+    });
   };
 
   const handleDeepCleanup = () => {
     const total = deepScanResults.emptyMemories.length + deepScanResults.invalidNodes.length + deepScanResults.circularNodes.length;
     if (total === 0) {
-      alert('深度扫描未发现异常数据。');
+      showAlert('提示', '深度扫描未发现异常数据。');
       return;
     }
 
-    if (confirm(`深度扫描发现：\n- 空白记忆: ${deepScanResults.emptyMemories.length}\n- 无效节点: ${deepScanResults.invalidNodes.length}\n- 循环引用节点: ${deepScanResults.circularNodes.length}\n\n是否立即清理这些异常数据？`)) {
+    showConfirm('深度清理', `深度扫描发现：\n- 空白记忆: ${deepScanResults.emptyMemories.length}\n- 无效节点: ${deepScanResults.invalidNodes.length}\n- 循环引用节点: ${deepScanResults.circularNodes.length}\n\n是否立即清理这些异常数据？`, () => {
       if (deepScanResults.emptyMemories.length > 0) {
         dispatch({ type: 'BATCH_DELETE_MEMORIES', payload: deepScanResults.emptyMemories.map(m => m.id) });
       }
@@ -173,23 +182,23 @@ export default function DataGovernanceSettings() {
       if (nodesToDelete.length > 0) {
         dispatch({ type: 'BATCH_DELETE_NODES', payload: Array.from(new Set(nodesToDelete)) });
       }
-      alert('深度清理完成。');
-    }
+      showAlert('成功', '深度清理完成。');
+    });
   };
 
   const handleFixBrokenNodes = () => {
     const nodeIds = new Set(state.knowledgeNodes.map(n => n.id));
     const brokenNodes = state.knowledgeNodes.filter(n => n.parentId && !nodeIds.has(n.parentId));
     if (brokenNodes.length === 0) {
-      alert('未发现异常节点。');
+      showAlert('提示', '未发现异常节点。');
       return;
     }
-    if (confirm(`发现 ${brokenNodes.length} 个异常节点（父节点不存在），是否修复？`)) {
+    showConfirm('修复异常节点', `发现 ${brokenNodes.length} 个异常节点（父节点不存在），是否修复？`, () => {
       brokenNodes.forEach(node => {
         dispatch({ type: 'UPDATE_NODE', payload: { ...node, parentId: null } });
       });
-      alert('修复完成。');
-    }
+      showAlert('成功', '修复完成。');
+    });
   };
 
   const handleAutoReorganize = async () => {
@@ -200,12 +209,11 @@ export default function DataGovernanceSettings() {
       const operations = await reorganizeKnowledgeGraph(state.settings, state.currentSubject, subjectNodes);
       
       if (operations.length === 0) {
-        alert('图谱结构已经很完善，无需调整。');
+        showAlert('提示', '图谱结构已经很完善，无需调整。');
         return;
       }
 
-      if (confirm(`AI 建议执行 ${operations.length} 项调整以优化图谱结构。是否立即应用？`)) {
-        // Apply operations directly for simplicity in settings
+      showConfirm('AI 自动整理', `AI 建议执行 ${operations.length} 项调整以优化图谱结构。是否立即应用？`, () => {
         operations.forEach(op => {
           if (op.action === 'add') {
             dispatch({ type: 'ADD_NODE', payload: { ...op.node, id: uuidv4() } });
@@ -215,11 +223,11 @@ export default function DataGovernanceSettings() {
             dispatch({ type: 'DELETE_NODE', payload: op.nodeId });
           }
         });
-        alert('自动整理完成。');
-      }
+        showAlert('成功', '自动整理完成。');
+      });
     } catch (error) {
       console.error('Failed to reorganize graph:', error);
-      alert('自动整理失败，请检查网络或API Key配置。');
+      showAlert('错误', '自动整理失败，请检查网络或API Key配置。');
     } finally {
       setLoading(false);
     }
@@ -228,11 +236,11 @@ export default function DataGovernanceSettings() {
   const handleOneClickCleanup = () => {
     const total = duplicates.memories.length + duplicates.nodes.length + deepScanResults.emptyMemories.length + deepScanResults.invalidNodes.length + deepScanResults.circularNodes.length;
     if (total === 0) {
-      alert('未发现可清理的冗余或异常数据。');
+      showAlert('提示', '未发现可清理的冗余或异常数据。');
       return;
     }
 
-    if (confirm(`一键清理将执行以下操作：\n- 清理重复记忆: ${duplicates.memories.length}\n- 清理重复节点: ${duplicates.nodes.length}\n- 清理空白记忆: ${deepScanResults.emptyMemories.length}\n- 清理无效/循环节点: ${deepScanResults.invalidNodes.length + deepScanResults.circularNodes.length}\n\n是否立即执行？`)) {
+    showConfirm('一键清理', `一键清理将执行以下操作：\n- 清理重复记忆: ${duplicates.memories.length}\n- 清理重复节点: ${duplicates.nodes.length}\n- 清理空白记忆: ${deepScanResults.emptyMemories.length}\n- 清理无效/循环节点: ${deepScanResults.invalidNodes.length + deepScanResults.circularNodes.length}\n\n是否立即执行？`, () => {
       if (duplicates.memories.length > 0) {
         dispatch({ type: 'BATCH_DELETE_MEMORIES', payload: duplicates.memories.map(m => m.id) });
       }
@@ -247,8 +255,8 @@ export default function DataGovernanceSettings() {
       if (nodesToDelete.length > 0) {
         dispatch({ type: 'BATCH_DELETE_NODES', payload: Array.from(new Set(nodesToDelete)) });
       }
-      alert('一键清理完成。');
-    }
+      showAlert('成功', '一键清理完成。');
+    });
   };
 
   return (
@@ -431,6 +439,44 @@ export default function DataGovernanceSettings() {
           </button>
         </section>
       </div>
+
+      {/* Custom Modal */}
+      {modalConfig.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-6">
+              <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+                {modalConfig.type === 'confirm' ? <AlertTriangle className="w-5 h-5 text-amber-500" /> : <ShieldAlert className="w-5 h-5 text-indigo-500" />}
+                {modalConfig.title}
+              </h3>
+              <p className="text-slate-300 text-sm whitespace-pre-wrap leading-relaxed">
+                {modalConfig.message}
+              </p>
+            </div>
+            <div className="px-6 py-4 bg-slate-950/50 border-t border-slate-800 flex justify-end gap-3">
+              {modalConfig.type === 'confirm' && (
+                <button
+                  onClick={() => setModalConfig({ ...modalConfig, isOpen: false })}
+                  className="px-4 py-2 text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors"
+                >
+                  取消
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  if (modalConfig.type === 'confirm' && modalConfig.onConfirm) {
+                    modalConfig.onConfirm();
+                  }
+                  setModalConfig({ ...modalConfig, isOpen: false });
+                }}
+                className="px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors"
+              >
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

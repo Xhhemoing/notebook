@@ -8,9 +8,10 @@ import { Memory, KnowledgeNode, Textbook, Subject } from '@/lib/types';
 
 export function DataManager() {
   const { state, dispatch } = useAppContext();
-  const [activeTab, setActiveTab] = useState<'memories' | 'rag' | 'textbooks' | 'resources'>('memories');
+  const [activeTab, setActiveTab] = useState<'memories' | 'mistakes' | 'rag' | 'textbooks' | 'resources' | 'logs'>('memories');
   const [searchQuery, setSearchQuery] = useState('');
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
+  const [logTypeFilter, setLogTypeFilter] = useState<string>('all');
   const [collapsedItems, setCollapsedItems] = useState<Set<string>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
@@ -44,7 +45,7 @@ export function DataManager() {
     if (selectedIds.size === 0) return;
     if (confirm(`确定要删除选中的 ${selectedIds.size} 项数据吗？此操作不可撤销。`)) {
       const ids = Array.from(selectedIds);
-      if (activeTab === 'memories') {
+      if (activeTab === 'memories' || activeTab === 'mistakes') {
         dispatch({ type: 'BATCH_DELETE_MEMORIES', payload: ids });
       } else if (activeTab === 'rag') {
         dispatch({ type: 'BATCH_DELETE_NODES', payload: ids });
@@ -52,13 +53,67 @@ export function DataManager() {
         dispatch({ type: 'BATCH_DELETE_TEXTBOOKS', payload: ids });
       } else if (activeTab === 'resources') {
         ids.forEach(id => dispatch({ type: 'DELETE_RESOURCE', payload: id }));
+      } else if (activeTab === 'logs') {
+        // We don't have a batch delete logs action, but we can add one or just clear all
+        alert('暂不支持批量删除日志，请使用清空日志功能。');
       }
       setSelectedIds(new Set());
     }
   };
 
+  const handleExportLogs = () => {
+    if (selectedIds.size === 0) {
+      alert('请先选择要导出的日志。');
+      return;
+    }
+    const logsToExport = state.logs.filter(l => selectedIds.has(l.id));
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(logsToExport, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href",     dataStr);
+    downloadAnchorNode.setAttribute("download", "ai_logs_export.json");
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+  };
+
+  const handleClearCache = () => {
+    if (confirm('确定要清空所有 AI 日志缓存吗？此操作不可撤销。')) {
+      dispatch({ type: 'CLEAR_LOGS' });
+    }
+  };
+
+  const handleDeleteDuplicates = () => {
+    if (confirm('确定要查找并删除内容完全重复的记忆吗？')) {
+      const seen = new Set<string>();
+      const duplicateIds: string[] = [];
+      state.memories.forEach(m => {
+        const key = `${m.subject}:${m.content}`;
+        if (seen.has(key)) {
+          duplicateIds.push(m.id);
+        } else {
+          seen.add(key);
+        }
+      });
+      if (duplicateIds.length > 0) {
+        dispatch({ type: 'BATCH_DELETE_MEMORIES', payload: duplicateIds });
+        alert(`成功删除了 ${duplicateIds.length} 条重复记忆。`);
+      } else {
+        alert('没有发现重复的记忆。');
+      }
+    }
+  };
+
   const filteredMemories = useMemo(() => {
     return state.memories.filter(m => 
+      !m.isMistake &&
+      (subjectFilter === 'all' || m.subject === subjectFilter) && 
+      (m.content.toLowerCase().includes(searchQuery.toLowerCase()) || m.subject.toLowerCase().includes(searchQuery.toLowerCase()))
+    );
+  }, [state.memories, subjectFilter, searchQuery]);
+
+  const filteredMistakes = useMemo(() => {
+    return state.memories.filter(m => 
+      m.isMistake &&
       (subjectFilter === 'all' || m.subject === subjectFilter) && 
       (m.content.toLowerCase().includes(searchQuery.toLowerCase()) || m.subject.toLowerCase().includes(searchQuery.toLowerCase()))
     );
@@ -84,6 +139,13 @@ export function DataManager() {
       (r.name.toLowerCase().includes(searchQuery.toLowerCase()) || r.subject.toLowerCase().includes(searchQuery.toLowerCase()))
     );
   }, [state.resources, subjectFilter, searchQuery]);
+
+  const filteredLogs = useMemo(() => {
+    return (state.logs || []).filter(l => 
+      (logTypeFilter === 'all' || l.type === logTypeFilter) &&
+      (l.prompt.toLowerCase().includes(searchQuery.toLowerCase()) || l.response.toLowerCase().includes(searchQuery.toLowerCase()))
+    ).sort((a, b) => b.timestamp - a.timestamp);
+  }, [state.logs, logTypeFilter, searchQuery]);
 
   const subjects = Array.from(new Set([
     ...state.memories.map(m => m.subject),
@@ -163,49 +225,83 @@ export function DataManager() {
           </p>
         </div>
         <div className="flex gap-2">
+          <button
+            onClick={handleDeleteDuplicates}
+            className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition-colors"
+          >
+            <Layers className="w-4 h-4" />
+            清理重复数据
+          </button>
+          <button
+            onClick={handleClearCache}
+            className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition-colors"
+          >
+            <Trash2 className="w-4 h-4" />
+            清空日志缓存
+          </button>
         </div>
       </div>
 
         <div className="flex gap-4 border-b border-slate-800 pb-4 overflow-x-auto custom-scrollbar">
           <button
-            onClick={() => setActiveTab('memories')}
+            onClick={() => { setActiveTab('memories'); setSelectedIds(new Set()); }}
             className={clsx(
               "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold uppercase tracking-widest transition-colors shrink-0",
               activeTab === 'memories' ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:bg-slate-800"
             )}
           >
             <BrainCircuit className="w-4 h-4" />
-            记忆库 ({state.memories.length})
+            记忆库 ({filteredMemories.length})
           </button>
           <button
-            onClick={() => setActiveTab('rag')}
+            onClick={() => { setActiveTab('mistakes'); setSelectedIds(new Set()); }}
+            className={clsx(
+              "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold uppercase tracking-widest transition-colors shrink-0",
+              activeTab === 'mistakes' ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:bg-slate-800"
+            )}
+          >
+            <AlertTriangle className="w-4 h-4" />
+            错题本 ({filteredMistakes.length})
+          </button>
+          <button
+            onClick={() => { setActiveTab('rag'); setSelectedIds(new Set()); }}
             className={clsx(
               "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold uppercase tracking-widest transition-colors shrink-0",
               activeTab === 'rag' ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:bg-slate-800"
             )}
           >
             <Network className="w-4 h-4" />
-            知识图谱/RAG ({state.knowledgeNodes.length})
+            知识图谱 ({filteredNodes.length})
           </button>
           <button
-            onClick={() => setActiveTab('textbooks')}
+            onClick={() => { setActiveTab('textbooks'); setSelectedIds(new Set()); }}
             className={clsx(
               "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold uppercase tracking-widest transition-colors shrink-0",
               activeTab === 'textbooks' ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:bg-slate-800"
             )}
           >
             <FileText className="w-4 h-4" />
-            文件/课本 ({state.textbooks.length})
+            课本 ({filteredTextbooks.length})
           </button>
           <button
-            onClick={() => setActiveTab('resources')}
+            onClick={() => { setActiveTab('resources'); setSelectedIds(new Set()); }}
             className={clsx(
               "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold uppercase tracking-widest transition-colors shrink-0",
               activeTab === 'resources' ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:bg-slate-800"
             )}
           >
             <Database className="w-4 h-4" />
-            资源库 ({(state.resources || []).length})
+            资源 ({filteredResources.length})
+          </button>
+          <button
+            onClick={() => { setActiveTab('logs'); setSelectedIds(new Set()); }}
+            className={clsx(
+              "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold uppercase tracking-widest transition-colors shrink-0",
+              activeTab === 'logs' ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:bg-slate-800"
+            )}
+          >
+            <Zap className="w-4 h-4" />
+            AI 日志 ({filteredLogs.length})
           </button>
         </div>
 
@@ -221,24 +317,48 @@ export function DataManager() {
               />
             </div>
             <div className="flex gap-2">
-              <select
-                value={subjectFilter}
-                onChange={(e) => setSubjectFilter(e.target.value)}
-                className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 transition-colors"
-              >
-                <option value="all">所有学科</option>
-                {subjects.map(s => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-              {selectedIds.size > 0 && (
-                <button
-                  onClick={handleBatchDelete}
-                  className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all"
+              {activeTab === 'logs' ? (
+                <select
+                  value={logTypeFilter}
+                  onChange={(e) => setLogTypeFilter(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 transition-colors"
                 >
-                  <Trash2 className="w-4 h-4" />
-                  批量删除 ({selectedIds.size})
-                </button>
+                  <option value="all">所有类型</option>
+                  <option value="parse">解析</option>
+                  <option value="chat">对话</option>
+                  <option value="graph">图谱</option>
+                  <option value="review">复习</option>
+                </select>
+              ) : (
+                <select
+                  value={subjectFilter}
+                  onChange={(e) => setSubjectFilter(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 transition-colors"
+                >
+                  <option value="all">所有学科</option>
+                  {subjects.map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              )}
+              {selectedIds.size > 0 && (
+                <>
+                  {activeTab === 'logs' && (
+                    <button
+                      onClick={handleExportLogs}
+                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all"
+                    >
+                      导出 ({selectedIds.size})
+                    </button>
+                  )}
+                  <button
+                    onClick={handleBatchDelete}
+                    className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    批量删除 ({selectedIds.size})
+                  </button>
+                </>
               )}
               {activeTab === 'memories' && subjectFilter !== 'all' && (
             <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3">
@@ -334,6 +454,88 @@ export function DataManager() {
             ))}
             {filteredMemories.length === 0 && (
               <div className="p-8 text-center text-slate-500 text-sm">暂无匹配的记忆数据</div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'mistakes' && (
+          <div className="divide-y divide-slate-800 max-h-[60vh] overflow-y-auto custom-scrollbar">
+            <div className="p-3 bg-slate-900/80 border-b border-slate-800 flex items-center gap-3 sticky top-0 z-10">
+              <button
+                onClick={() => {
+                  if (selectedIds.size === filteredMistakes.length) {
+                    setSelectedIds(new Set());
+                  } else {
+                    setSelectedIds(new Set(filteredMistakes.map(m => m.id)));
+                  }
+                }}
+                className="text-slate-500 hover:text-white transition-colors"
+              >
+                {selectedIds.size === filteredMistakes.length && filteredMistakes.length > 0 ? <CheckSquare className="w-5 h-5 text-indigo-500" /> : <Square className="w-5 h-5" />}
+              </button>
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">全选 / 已选 {selectedIds.size} 项</span>
+            </div>
+            {filteredMistakes.map(m => (
+              <div key={m.id} className={clsx("p-4 hover:bg-slate-800/50 transition-colors flex gap-4", selectedIds.has(m.id) && "bg-indigo-500/5")}>
+                <button
+                  onClick={() => toggleSelect(m.id)}
+                  className="mt-1 text-slate-700 hover:text-indigo-500 transition-colors shrink-0"
+                >
+                  {selectedIds.has(m.id) ? <CheckSquare className="w-5 h-5 text-indigo-500" /> : <Square className="w-5 h-5" />}
+                </button>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0" onClick={() => toggleCollapse(m.id)}>
+                      <div className="flex items-center gap-2 mb-2 cursor-pointer">
+                        <span className="px-2 py-0.5 bg-red-500/10 text-red-400 rounded text-[10px] font-bold uppercase tracking-widest">
+                          {m.subject} 错题
+                        </span>
+                        <span className="text-xs text-slate-500">{new Date(m.createdAt).toLocaleString()}</span>
+                      </div>
+                      {editingMemoryId === m.id ? (
+                        <div className="space-y-2">
+                          <textarea
+                            value={editingMemoryContent}
+                            onChange={(e) => setEditingMemoryContent(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+                            rows={3}
+                          />
+                          <div className="flex gap-2">
+                            <button onClick={(e) => { e.stopPropagation(); handleSaveMemoryEdit(m.id); }} className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700">保存</button>
+                            <button onClick={(e) => { e.stopPropagation(); setEditingMemoryId(null); }} className="px-3 py-1.5 bg-slate-700 text-white text-xs font-bold rounded-lg hover:bg-slate-600">取消</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className={clsx("space-y-2", collapsedItems.has(m.id) ? "line-clamp-2" : "")}>
+                          <p className="text-sm text-slate-300 font-medium">{m.content}</p>
+                          {m.wrongAnswer && <p className="text-xs text-red-400">错误答案: {m.wrongAnswer}</p>}
+                          {m.errorReason && <p className="text-xs text-orange-400">错误原因: {m.errorReason}</p>}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => {
+                          setEditingMemoryId(m.id);
+                          setEditingMemoryContent(m.content);
+                        }}
+                        className="p-2 text-slate-500 hover:text-indigo-400 transition-colors rounded-lg hover:bg-indigo-400/10"
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteMemory(m.id)}
+                        className="p-2 text-slate-500 hover:text-red-400 transition-colors rounded-lg hover:bg-red-400/10"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {filteredMistakes.length === 0 && (
+              <div className="p-8 text-center text-slate-500 text-sm">暂无匹配的错题数据</div>
             )}
           </div>
         )}
@@ -513,6 +715,62 @@ export function DataManager() {
             ))}
             {filteredResources.length === 0 && (
               <div className="p-8 text-center text-slate-500 text-sm">暂无匹配的资源</div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'logs' && (
+          <div className="divide-y divide-slate-800 max-h-[60vh] overflow-y-auto custom-scrollbar">
+            <div className="p-3 bg-slate-900/80 border-b border-slate-800 flex items-center gap-3 sticky top-0 z-10">
+              <button
+                onClick={() => {
+                  if (selectedIds.size === filteredLogs.length) {
+                    setSelectedIds(new Set());
+                  } else {
+                    setSelectedIds(new Set(filteredLogs.map(l => l.id)));
+                  }
+                }}
+                className="text-slate-500 hover:text-white transition-colors"
+              >
+                {selectedIds.size === filteredLogs.length && filteredLogs.length > 0 ? <CheckSquare className="w-5 h-5 text-indigo-500" /> : <Square className="w-5 h-5" />}
+              </button>
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">全选 / 已选 {selectedIds.size} 项</span>
+            </div>
+            {filteredLogs.map(log => (
+              <div key={log.id} className={clsx("p-4 hover:bg-slate-800/50 transition-colors flex gap-4", selectedIds.has(log.id) && "bg-indigo-500/5")}>
+                <button
+                  onClick={() => toggleSelect(log.id)}
+                  className="mt-1 text-slate-700 hover:text-indigo-500 transition-colors shrink-0"
+                >
+                  {selectedIds.has(log.id) ? <CheckSquare className="w-5 h-5 text-indigo-500" /> : <Square className="w-5 h-5" />}
+                </button>
+                <div className="flex-1 min-w-0" onClick={() => toggleCollapse(log.id)}>
+                  <div className="flex items-center gap-2 mb-2 cursor-pointer">
+                    <span className="px-2 py-0.5 bg-blue-500/10 text-blue-400 rounded text-[10px] font-bold uppercase tracking-widest">
+                      {log.type}
+                    </span>
+                    <span className="text-xs text-slate-500">{new Date(log.timestamp).toLocaleString()}</span>
+                    <span className="text-xs text-slate-600 ml-auto">{log.model}</span>
+                  </div>
+                  {collapsedItems.has(log.id) ? (
+                    <p className="text-sm text-slate-300 line-clamp-1">{log.prompt}</p>
+                  ) : (
+                    <div className="space-y-4">
+                      <div>
+                        <h5 className="text-xs font-bold text-slate-500 mb-1">Prompt:</h5>
+                        <p className="text-sm text-slate-300 whitespace-pre-wrap bg-slate-950 p-3 rounded-lg border border-slate-800">{log.prompt}</p>
+                      </div>
+                      <div>
+                        <h5 className="text-xs font-bold text-slate-500 mb-1">Response:</h5>
+                        <p className="text-sm text-slate-300 whitespace-pre-wrap bg-slate-950 p-3 rounded-lg border border-slate-800">{log.response}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+            {filteredLogs.length === 0 && (
+              <div className="p-8 text-center text-slate-500 text-sm">暂无匹配的日志</div>
             )}
           </div>
         )}

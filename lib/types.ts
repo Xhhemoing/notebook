@@ -43,6 +43,8 @@ export interface Memory {
   fsrs?: FSRSData;
   embedding?: number[]; // For RAG
   type?: 'concept' | 'qa' | 'vocabulary';
+  collectionId?: string; // For grouping into "books" like Vocabulary Book
+  collectionName?: string;
   vocabularyData?: {
     context?: string;
     meaning?: string;

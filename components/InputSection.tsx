@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useAppContext } from '@/lib/store';
 import { parseNotes, getEmbedding } from '@/lib/ai';
-import { Loader2, UploadCloud, FileText, CheckCircle2, Info, ChevronDown, ChevronUp, Trash2, PlusCircle, Sparkles, X, Image as ImageIcon, AlertCircle, History } from 'lucide-react';
+import { Loader2, UploadCloud, FileText, CheckCircle2, Info, ChevronDown, ChevronUp, Trash2, PlusCircle, Sparkles, X, Image as ImageIcon, AlertCircle, History, BrainCircuit } from 'lucide-react';
 import { clsx } from 'clsx';
 import { getInitialFSRSData } from '@/lib/fsrs';
 import Markdown from 'react-markdown';
@@ -11,6 +11,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { v4 as uuidv4 } from 'uuid';
 import { InputHistoryItem } from '@/lib/types';
+import { ModelSelector } from '@/components/ModelSelector';
 
 import { saveImage } from '@/lib/db';
 
@@ -49,6 +50,12 @@ export function InputSection() {
   } | null>(null);
   const [collapsedItems, setCollapsedItems] = useState<Set<number>>(new Set());
   const [showHistory, setShowHistory] = useState(false);
+  const [selectedModel, setSelectedModel] = useState(state.settings.parseModel);
+
+  // Sync selectedModel if default changes
+  useEffect(() => {
+    setSelectedModel(state.settings.parseModel);
+  }, [state.settings.parseModel]);
 
   const processImageToScan = (base64: string): Promise<string> => {
     return new Promise((resolve) => {
@@ -141,6 +148,22 @@ export function InputSection() {
           reader.readAsDataURL(file);
         });
         
+        // Auto-archive to Resource Library
+        dispatch({
+          type: 'ADD_RESOURCE',
+          payload: {
+            id: uuidv4(),
+            name: file.name,
+            type: file.type || 'unknown',
+            size: file.size,
+            createdAt: Date.now(),
+            data: base64,
+            subject: state.currentSubject,
+            isFolder: false,
+            parentId: null
+          }
+        });
+
         if (isScanMode && file.type.startsWith('image/')) {
           const scanned = await processImageToScan(base64);
           newImages.push(scanned);
@@ -152,7 +175,7 @@ export function InputSection() {
         setImages(prev => [...prev, ...newImages]);
       }
     }
-  }, [isScanMode]);
+  }, [isScanMode, dispatch, state.currentSubject]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -251,7 +274,7 @@ export function InputSection() {
         fullPrompt,
         state.currentSubject,
         state.knowledgeNodes,
-        state.settings,
+        { ...state.settings, parseModel: selectedModel },
         images.length > 0 ? images : undefined,
         explicitFunction !== 'auto' ? explicitFunction : undefined,
         explicitPurpose !== 'auto' ? explicitPurpose : undefined,
@@ -452,14 +475,22 @@ export function InputSection() {
   if (loading) {
     return (
       <div className="max-w-5xl mx-auto p-6 space-y-6">
-        <div className="bg-slate-900 rounded-2xl shadow-sm border border-slate-800 p-6 space-y-6">
-          <div className="flex items-center gap-3">
-            <Loader2 className="w-6 h-6 text-indigo-500 animate-spin" />
-            <h2 className="text-xl font-semibold text-slate-100">AI 正在深度解析...</h2>
+        <div className="bg-slate-900 rounded-2xl shadow-sm border border-slate-800 p-8 flex flex-col items-center justify-center min-h-[400px] text-center">
+          <div className="relative mb-8">
+            <div className="w-20 h-20 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin"></div>
+            <BrainCircuit className="w-10 h-10 text-indigo-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 animate-pulse" />
           </div>
+          <h2 className="text-2xl font-bold text-slate-100 mb-3 tracking-tight">AI 正在深度思考中...</h2>
+          <p className="text-slate-400 max-w-md leading-relaxed mb-8">
+            我正在扫描你的笔记与图片，识别手写标记，并尝试将其与你的知识图谱建立深层联系。
+          </p>
           
           {analysisProcess && (
-            <div className="p-4 bg-slate-950 rounded-xl border border-slate-800">
+            <div className="w-full max-w-2xl p-4 bg-slate-950 rounded-xl border border-slate-800 text-left">
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></div>
+                实时思考过程
+              </div>
               <p className="text-sm text-slate-300 font-mono leading-relaxed whitespace-pre-wrap">
                 {analysisProcess}
                 <span className="inline-block w-2 h-4 ml-1 bg-indigo-500 animate-pulse"></span>
@@ -467,14 +498,13 @@ export function InputSection() {
             </div>
           )}
 
-          <div className="space-y-4">
-            <div className="h-4 bg-slate-800 rounded w-1/4 animate-pulse"></div>
-            <div className="space-y-3">
-              <div className="h-24 bg-slate-800 rounded-xl animate-pulse"></div>
-              <div className="h-24 bg-slate-800 rounded-xl animate-pulse opacity-75"></div>
-              <div className="h-24 bg-slate-800 rounded-xl animate-pulse opacity-50"></div>
+          {!analysisProcess && (
+            <div className="flex gap-2">
+              <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+              <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+              <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce"></div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     );
@@ -573,70 +603,144 @@ export function InputSection() {
                         />
                       )}
                       {item.correctAnswer && (
-                        <textarea
-                          value={item.correctAnswer || ''}
-                          onChange={(e) => {
-                            const newItems = [...pendingReview.parsedItems];
-                            newItems[index].correctAnswer = e.target.value;
-                            setPendingReview({ ...pendingReview, parsedItems: newItems });
-                          }}
-                          className="w-full p-2 text-sm border border-emerald-900/50 bg-emerald-900/20 text-emerald-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none resize-y"
-                          rows={2}
-                          placeholder="标准答案 (AI提取或手动输入)"
-                        />
+                        <div className="space-y-1">
+                          <div className="text-[10px] font-bold text-emerald-500/70 uppercase tracking-widest ml-1">标准答案</div>
+                          <textarea
+                            value={item.correctAnswer || ''}
+                            onChange={(e) => {
+                              const newItems = [...pendingReview.parsedItems];
+                              newItems[index].correctAnswer = e.target.value;
+                              setPendingReview({ ...pendingReview, parsedItems: newItems });
+                            }}
+                            className="w-full p-2 text-sm border border-emerald-900/50 bg-emerald-900/20 text-emerald-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none resize-y"
+                            rows={2}
+                            placeholder="标准答案 (AI提取或手动输入)"
+                          />
+                        </div>
                       )}
-                      {(item.wrongAnswer || item.errorReason) && (
+                      {(item.wrongAnswer || item.errorReason || item.isMistake || isMistake) && (
                         <div className="p-3 bg-red-900/10 border border-red-900/30 rounded-lg space-y-3">
-                          <div className="text-xs font-bold text-red-400 uppercase tracking-widest">错解与分析</div>
-                          {item.wrongAnswer && (
-                            <textarea
-                              value={item.wrongAnswer || ''}
-                              onChange={(e) => {
-                                const newItems = [...pendingReview.parsedItems];
-                                newItems[index].wrongAnswer = e.target.value;
-                                setPendingReview({ ...pendingReview, parsedItems: newItems });
-                              }}
-                              className="w-full p-2 text-sm border border-red-900/50 bg-red-900/20 text-red-200 rounded-lg focus:ring-2 focus:ring-red-500 outline-none resize-y"
-                              rows={2}
-                              placeholder="你的错误答案 (原笔迹提取)"
-                            />
-                          )}
-                          {item.errorReason && (
-                            <textarea
-                              value={item.errorReason || ''}
-                              onChange={(e) => {
-                                const newItems = [...pendingReview.parsedItems];
-                                newItems[index].errorReason = e.target.value;
-                                setPendingReview({ ...pendingReview, parsedItems: newItems });
-                              }}
-                              className="w-full p-2 text-sm border border-orange-900/50 bg-orange-900/20 text-orange-200 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none resize-y"
-                              rows={2}
-                              placeholder="错误原因分析 (如：概念混淆、计算错误)"
-                            />
-                          )}
+                          <div className="text-xs font-bold text-red-400 uppercase tracking-widest flex items-center justify-between">
+                            <span>错解与分析</span>
+                            {!item.wrongAnswer && !item.errorReason && <span className="text-[10px] font-normal normal-case opacity-50">(点击下方输入)</span>}
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <div className="text-[10px] font-bold text-red-400/70 uppercase tracking-widest ml-1">错误答案</div>
+                              <textarea
+                                value={item.wrongAnswer || ''}
+                                onChange={(e) => {
+                                  const newItems = [...pendingReview.parsedItems];
+                                  newItems[index].wrongAnswer = e.target.value;
+                                  setPendingReview({ ...pendingReview, parsedItems: newItems });
+                                }}
+                                className="w-full p-2 text-sm border border-red-900/50 bg-red-900/20 text-red-200 rounded-lg focus:ring-2 focus:ring-red-500 outline-none resize-y"
+                                rows={2}
+                                placeholder="你的错误答案"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-[10px] font-bold text-orange-400/70 uppercase tracking-widest ml-1">原因分析</div>
+                              <textarea
+                                value={item.errorReason || ''}
+                                onChange={(e) => {
+                                  const newItems = [...pendingReview.parsedItems];
+                                  newItems[index].errorReason = e.target.value;
+                                  setPendingReview({ ...pendingReview, parsedItems: newItems });
+                                }}
+                                className="w-full p-2 text-sm border border-orange-900/50 bg-orange-900/20 text-orange-200 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none resize-y"
+                                rows={2}
+                                placeholder="错误原因分析"
+                              />
+                            </div>
+                          </div>
                         </div>
                       )}
                     </div>
                   )}
                   
                   {item.type === 'vocabulary' && item.vocabularyData && (
-                    <div className="space-y-2 p-3 bg-teal-900/10 border border-teal-900/30 rounded-lg text-sm">
-                      <div className="text-xs font-bold text-teal-400 uppercase tracking-widest mb-2">词汇解析</div>
-                      {item.vocabularyData.meaning && (
-                        <div className="flex gap-2"><span className="text-teal-500/70 shrink-0">含义:</span><span className="text-teal-100">{item.vocabularyData.meaning}</span></div>
-                      )}
-                      {item.vocabularyData.context && (
-                        <div className="flex gap-2"><span className="text-teal-500/70 shrink-0">语境:</span><span className="text-teal-100 italic">{item.vocabularyData.context}</span></div>
-                      )}
-                      {item.vocabularyData.usage && (
-                        <div className="flex gap-2"><span className="text-teal-500/70 shrink-0">用法:</span><span className="text-teal-100">{item.vocabularyData.usage}</span></div>
-                      )}
-                      {item.vocabularyData.mnemonics && (
-                        <div className="flex gap-2"><span className="text-teal-500/70 shrink-0">助记:</span><span className="text-teal-100">{item.vocabularyData.mnemonics}</span></div>
-                      )}
-                      {item.vocabularyData.synonyms && item.vocabularyData.synonyms.length > 0 && (
-                        <div className="flex gap-2"><span className="text-teal-500/70 shrink-0">同义词:</span><span className="text-teal-100">{item.vocabularyData.synonyms.join(', ')}</span></div>
-                      )}
+                    <div className="space-y-3 p-4 bg-teal-900/10 border border-teal-900/30 rounded-xl text-sm">
+                      <div className="text-xs font-bold text-teal-400 uppercase tracking-widest mb-1">词汇解析 (Vocabulary)</div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-3">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] font-bold text-teal-500/70 uppercase tracking-widest ml-1">含义 (Meaning)</span>
+                            <input
+                              type="text"
+                              value={item.vocabularyData.meaning || ''}
+                              onChange={(e) => {
+                                const newItems = [...pendingReview.parsedItems];
+                                newItems[index].vocabularyData.meaning = e.target.value;
+                                setPendingReview({ ...pendingReview, parsedItems: newItems });
+                              }}
+                              className="w-full px-3 py-2 bg-teal-950/50 border border-teal-900/50 rounded-lg text-teal-100 focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all"
+                              placeholder="单词含义"
+                            />
+                          </div>
+                          
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] font-bold text-teal-500/70 uppercase tracking-widest ml-1">语境 (Context)</span>
+                            <textarea
+                              value={item.vocabularyData.context || ''}
+                              onChange={(e) => {
+                                const newItems = [...pendingReview.parsedItems];
+                                newItems[index].vocabularyData.context = e.target.value;
+                                setPendingReview({ ...pendingReview, parsedItems: newItems });
+                              }}
+                              className="w-full px-3 py-2 bg-teal-950/50 border border-teal-900/50 rounded-lg text-teal-100 italic focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all resize-y"
+                              rows={2}
+                              placeholder="原文例句"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] font-bold text-teal-500/70 uppercase tracking-widest ml-1">用法 (Usage)</span>
+                            <textarea
+                              value={item.vocabularyData.usage || ''}
+                              onChange={(e) => {
+                                const newItems = [...pendingReview.parsedItems];
+                                newItems[index].vocabularyData.usage = e.target.value;
+                                setPendingReview({ ...pendingReview, parsedItems: newItems });
+                              }}
+                              className="w-full px-3 py-2 bg-teal-950/50 border border-teal-900/50 rounded-lg text-teal-100 focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all resize-y"
+                              rows={2}
+                              placeholder="搭配、短语等"
+                            />
+                          </div>
+                          
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] font-bold text-teal-500/70 uppercase tracking-widest ml-1">助记 & 同义词</span>
+                            <div className="space-y-2">
+                              <input
+                                type="text"
+                                value={item.vocabularyData.mnemonics || ''}
+                                onChange={(e) => {
+                                  const newItems = [...pendingReview.parsedItems];
+                                  newItems[index].vocabularyData.mnemonics = e.target.value;
+                                  setPendingReview({ ...pendingReview, parsedItems: newItems });
+                                }}
+                                className="w-full px-3 py-2 bg-teal-950/50 border border-teal-900/50 rounded-lg text-teal-100 focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all"
+                                placeholder="助记方法"
+                              />
+                              <input
+                                type="text"
+                                value={item.vocabularyData.synonyms?.join(', ') || ''}
+                                onChange={(e) => {
+                                  const newItems = [...pendingReview.parsedItems];
+                                  newItems[index].vocabularyData.synonyms = e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean);
+                                  setPendingReview({ ...pendingReview, parsedItems: newItems });
+                                }}
+                                placeholder="同义词 (逗号分隔)"
+                                className="w-full px-3 py-2 bg-teal-950/50 border border-teal-900/50 rounded-lg text-teal-100 focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   )}
                   <div className="flex items-center gap-4 text-xs flex-wrap">
@@ -670,6 +774,17 @@ export function InputSection() {
                       <option value="fill-in-the-blank">填空题</option>
                       <option value="essay">解答题</option>
                     </select>
+                    <input
+                      type="text"
+                      value={item.collectionName || ''}
+                      onChange={(e) => {
+                        const newItems = [...pendingReview.parsedItems];
+                        newItems[index].collectionName = e.target.value;
+                        setPendingReview({ ...pendingReview, parsedItems: newItems });
+                      }}
+                      placeholder="归档本 (如: 词汇本)"
+                      className="px-2 py-1 border border-slate-700 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none w-32 bg-slate-800 text-slate-200"
+                    />
                     <input
                       type="text"
                       value={item.source || ''}
@@ -736,8 +851,8 @@ export function InputSection() {
                   <div>
                     <p className="text-xs font-semibold text-emerald-400 mb-2 uppercase tracking-wider">新增节点</p>
                     <ul className="space-y-1">
-                      {pendingReview.newNodes.map(node => (
-                        <li key={node.id} className="text-sm text-emerald-300 flex flex-col gap-1">
+                      {pendingReview.newNodes.map((node, idx) => (
+                        <li key={`${node.id}-${idx}`} className="text-sm text-emerald-300 flex flex-col gap-1">
                           <div className="flex items-center gap-2">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
                             {node.name} <span className="text-emerald-500/70 text-xs">(父节点: {state.knowledgeNodes.find(n => n.id === node.parentId)?.name || node.parentId || '根节点'})</span>
@@ -756,10 +871,10 @@ export function InputSection() {
                   <div>
                     <p className="text-xs font-semibold text-red-400 mb-2 uppercase tracking-wider">建议删除节点</p>
                     <ul className="space-y-1">
-                      {pendingReview.deletedNodeIds.map(id => {
+                      {pendingReview.deletedNodeIds.map((id, idx) => {
                         const node = state.knowledgeNodes.find(n => n.id === id);
                         return (
-                          <li key={id} className="text-sm text-red-300 flex items-center gap-2 line-through">
+                          <li key={`delete-${id}-${idx}`} className="text-sm text-red-300 flex items-center gap-2 line-through">
                             <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
                             {node?.name || id}
                           </li>
@@ -995,7 +1110,7 @@ export function InputSection() {
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-4 pt-2">
+          <div className="grid grid-cols-3 gap-4 pt-2">
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1">功能分类 (可选)</label>
               <select 
@@ -1021,6 +1136,14 @@ export function InputSection() {
                   <option key={t} value={t}>{t}</option>
                 ))}
               </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">解析模型</label>
+              <ModelSelector
+                value={selectedModel}
+                onChange={setSelectedModel}
+                className="w-full p-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
+              />
             </div>
           </div>
 

@@ -37,6 +37,23 @@ database_name = "ai-assistant-db"
 database_id = "xxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxx"
 ```
 
+```
+✅ Successfully created DB 'ai-assistant-db' in region WNAM
+Created your new D1 database.
+
+To access your new D1 Database in your Worker, add the following snippet to your configuration file:
+{
+  "d1_databases": [
+    {
+      "binding": "ai_assistant_db",
+      "database_name": "ai-assistant-db",
+      "database_id": "d77130f5-8454-4490-b322-544692054e8f"
+    }
+  ]
+}
+```
+
+
 ## 3. 配置项目
 
 在项目根目录下创建或修改 `wrangler.toml` 文件，将上一步获取的 `database_name` 和 `database_id` 填入：

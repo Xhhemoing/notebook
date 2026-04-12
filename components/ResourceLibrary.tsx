@@ -1,11 +1,58 @@
 'use client';
 
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useCallback } from 'react';
 import { useAppContext } from '@/lib/store';
-import { Database, UploadCloud, FileText, Image as ImageIcon, File, Trash2, Download, Search, HardDrive, Folder, ChevronRight, FolderPlus } from 'lucide-react';
+import { Database, UploadCloud, FileText, Image as ImageIcon, File, Trash2, Download, Search, HardDrive, Folder, ChevronRight, FolderPlus, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { Resource } from '@/lib/types';
 import { clsx } from 'clsx';
+
+async function processFile(file: File, parentId: string | null, dispatch: any, subject: string) {
+  const reader = new FileReader();
+  reader.onloadend = () => {
+    const newResource: Resource = {
+      id: uuidv4(),
+      name: file.name,
+      type: file.type || 'unknown',
+      size: file.size,
+      createdAt: Date.now(),
+      data: reader.result as string,
+      subject: subject,
+      isFolder: false,
+      parentId: parentId
+    };
+    dispatch({ type: 'ADD_RESOURCE', payload: newResource });
+  };
+  reader.readAsDataURL(file);
+}
+
+async function traverseFileTree(item: any, parentId: string | null, dispatch: any, subject: string) {
+  if (item.isFile) {
+    item.file((file: File) => {
+      processFile(file, parentId, dispatch, subject);
+    });
+  } else if (item.isDirectory) {
+    const folderId = uuidv4();
+    const newFolder: Resource = {
+      id: folderId,
+      name: item.name,
+      type: 'folder',
+      size: 0,
+      createdAt: Date.now(),
+      subject: subject,
+      isFolder: true,
+      parentId: parentId
+    };
+    dispatch({ type: 'ADD_RESOURCE', payload: newFolder });
+
+    const dirReader = item.createReader();
+    dirReader.readEntries(async (entries: any[]) => {
+      for (let i = 0; i < entries.length; i++) {
+        await traverseFileTree(entries[i], folderId, dispatch, subject);
+      }
+    });
+  }
+}
 
 export function ResourceLibrary() {
   const { state, dispatch } = useAppContext();
@@ -13,6 +60,19 @@ export function ResourceLibrary() {
   const [searchQuery, setSearchQuery] = useState('');
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [modalConfig, setModalConfig] = useState<{ isOpen: boolean, title: string, message: string, type: 'alert' | 'confirm' | 'prompt', onConfirm?: (value?: string) => void, inputValue?: string }>({ isOpen: false, title: '', message: '', type: 'alert' });
+
+  const showAlert = (title: string, message: string) => {
+    setModalConfig({ isOpen: true, title, message, type: 'alert' });
+  };
+
+  const showConfirm = (title: string, message: string, onConfirm: () => void) => {
+    setModalConfig({ isOpen: true, title, message, type: 'confirm', onConfirm });
+  };
+
+  const showPrompt = (title: string, message: string, onConfirm: (value?: string) => void) => {
+    setModalConfig({ isOpen: true, title, message, type: 'prompt', onConfirm, inputValue: '' });
+  };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -32,37 +92,9 @@ export function ResourceLibrary() {
       for (let i = 0; i < items.length; i++) {
         const item = items[i].webkitGetAsEntry();
         if (item) {
-          await traverseFileTree(item, currentFolderId);
+          await traverseFileTree(item, currentFolderId, dispatch, state.currentSubject);
         }
       }
-    }
-  };
-
-  const traverseFileTree = async (item: any, parentId: string | null) => {
-    if (item.isFile) {
-      item.file((file: File) => {
-        processFile(file, parentId);
-      });
-    } else if (item.isDirectory) {
-      const folderId = uuidv4();
-      const newFolder: Resource = {
-        id: folderId,
-        name: item.name,
-        type: 'folder',
-        size: 0,
-        createdAt: Date.now(),
-        subject: state.currentSubject,
-        isFolder: true,
-        parentId: parentId
-      };
-      dispatch({ type: 'ADD_RESOURCE', payload: newFolder });
-
-      const dirReader = item.createReader();
-      dirReader.readEntries(async (entries: any[]) => {
-        for (let i = 0; i < entries.length; i++) {
-          await traverseFileTree(entries[i], folderId);
-        }
-      });
     }
   };
 
@@ -70,49 +102,31 @@ export function ResourceLibrary() {
     if (e.target.files) {
       const files = Array.from(e.target.files);
       for (const file of files) {
-        await processFile(file, currentFolderId);
+        await processFile(file, currentFolderId, dispatch, state.currentSubject);
       }
     }
   };
 
-  const processFile = async (file: File, parentId: string | null) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const newResource: Resource = {
-        id: uuidv4(),
-        name: file.name,
-        type: file.type || 'unknown',
-        size: file.size,
-        createdAt: Date.now(),
-        data: reader.result as string,
-        subject: state.currentSubject,
-        isFolder: false,
-        parentId: parentId
-      };
-      dispatch({ type: 'ADD_RESOURCE', payload: newResource });
-    };
-    reader.readAsDataURL(file);
-  };
-
   const handleCreateFolder = () => {
-    const name = prompt('请输入文件夹名称：');
-    if (name) {
-      const newFolder: Resource = {
-        id: uuidv4(),
-        name: name,
-        type: 'folder',
-        size: 0,
-        createdAt: Date.now(),
-        subject: state.currentSubject,
-        isFolder: true,
-        parentId: currentFolderId
-      };
-      dispatch({ type: 'ADD_RESOURCE', payload: newFolder });
-    }
+    showPrompt('新建文件夹', '请输入文件夹名称：', (name) => {
+      if (name) {
+        const newFolder: Resource = {
+          id: uuidv4(),
+          name: name,
+          type: 'folder',
+          size: 0,
+          createdAt: Date.now(),
+          subject: state.currentSubject,
+          isFolder: true,
+          parentId: currentFolderId
+        };
+        dispatch({ type: 'ADD_RESOURCE', payload: newFolder });
+      }
+    });
   };
 
   const handleDelete = (id: string, isFolder?: boolean) => {
-    if (confirm(`确定要删除这个${isFolder ? '文件夹及其所有内容' : '文件'}吗？`)) {
+    showConfirm('删除确认', `确定要删除这个${isFolder ? '文件夹及其所有内容' : '文件'}吗？`, () => {
       if (isFolder) {
         // Recursively delete children
         const deleteRecursively = (parentId: string) => {
@@ -125,7 +139,7 @@ export function ResourceLibrary() {
         deleteRecursively(id);
       }
       dispatch({ type: 'DELETE_RESOURCE', payload: id });
-    }
+    });
   };
 
   const formatSize = (bytes: number) => {
@@ -307,6 +321,59 @@ export function ResourceLibrary() {
           )}
         </div>
       </div>
+
+      {/* Custom Modal */}
+      {modalConfig.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-6">
+              <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+                {modalConfig.type === 'confirm' ? <AlertTriangle className="w-5 h-5 text-amber-500" /> : <ShieldAlert className="w-5 h-5 text-teal-500" />}
+                {modalConfig.title}
+              </h3>
+              <p className="text-slate-300 text-sm whitespace-pre-wrap leading-relaxed mb-4">
+                {modalConfig.message}
+              </p>
+              {modalConfig.type === 'prompt' && (
+                <input
+                  type="text"
+                  autoFocus
+                  value={modalConfig.inputValue || ''}
+                  onChange={(e) => setModalConfig({ ...modalConfig, inputValue: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-teal-500 transition-colors"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && modalConfig.onConfirm) {
+                      modalConfig.onConfirm(modalConfig.inputValue);
+                      setModalConfig({ ...modalConfig, isOpen: false });
+                    }
+                  }}
+                />
+              )}
+            </div>
+            <div className="px-6 py-4 bg-slate-950/50 border-t border-slate-800 flex justify-end gap-3">
+              {(modalConfig.type === 'confirm' || modalConfig.type === 'prompt') && (
+                <button
+                  onClick={() => setModalConfig({ ...modalConfig, isOpen: false })}
+                  className="px-4 py-2 text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors"
+                >
+                  取消
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  if (modalConfig.onConfirm) {
+                    modalConfig.onConfirm(modalConfig.inputValue);
+                  }
+                  setModalConfig({ ...modalConfig, isOpen: false });
+                }}
+                className="px-4 py-2 text-sm font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-xl transition-colors"
+              >
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

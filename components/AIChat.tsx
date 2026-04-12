@@ -8,6 +8,8 @@ import { clsx } from 'clsx';
 import Markdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import { v4 as uuidv4 } from 'uuid';
+import { ModelSelector } from '@/components/ModelSelector';
 
 import { TextbookPagePreview } from './TextbookPagePreview';
 
@@ -46,6 +48,13 @@ export function AIChat() {
   const [enableRAG, setEnableRAG] = useState(true);
   const [isReorganizing, setIsReorganizing] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
+  const [selectedModel, setSelectedModel] = useState(state.settings.chatModel);
+
+  // Sync selectedModel if default changes
+  useEffect(() => {
+    setSelectedModel(state.settings.chatModel);
+  }, [state.settings.chatModel]);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const SKILLS = [
@@ -115,7 +124,7 @@ export function AIChat() {
         state.currentSubject, 
         finalContextMemories, 
         state.knowledgeNodes, 
-        state.settings, 
+        { ...state.settings, chatModel: selectedModel }, 
         state.textbooks,
         currentImage || undefined, 
         (log) => {
@@ -160,7 +169,24 @@ export function AIChat() {
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        setImage(reader.result as string);
+        const base64 = reader.result as string;
+        setImage(base64);
+        
+        // Auto-archive to Resource Library
+        dispatch({
+          type: 'ADD_RESOURCE',
+          payload: {
+            id: uuidv4(),
+            name: file.name,
+            type: file.type || 'unknown',
+            size: file.size,
+            createdAt: Date.now(),
+            data: base64,
+            subject: state.currentSubject,
+            isFolder: false,
+            parentId: null
+          }
+        });
       };
       reader.readAsDataURL(file);
     }
@@ -182,7 +208,24 @@ export function AIChat() {
     if (file && file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        setImage(reader.result as string);
+        const base64 = reader.result as string;
+        setImage(base64);
+        
+        // Auto-archive to Resource Library
+        dispatch({
+          type: 'ADD_RESOURCE',
+          payload: {
+            id: uuidv4(),
+            name: file.name,
+            type: file.type || 'unknown',
+            size: file.size,
+            createdAt: Date.now(),
+            data: base64,
+            subject: state.currentSubject,
+            isFolder: false,
+            parentId: null
+          }
+        });
       };
       reader.readAsDataURL(file);
     }
@@ -248,7 +291,11 @@ export function AIChat() {
             </button>
             <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-900/50 border border-slate-800 rounded-lg">
               <Sparkles className="w-3 h-3 text-blue-400" />
-              <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Gemini 3.1 Pro</span>
+              <ModelSelector
+                value={selectedModel}
+                onChange={setSelectedModel}
+                className="bg-transparent border-none text-[10px] font-black text-slate-400 uppercase tracking-widest outline-none"
+              />
             </div>
           </div>
         </div>
@@ -265,35 +312,39 @@ export function AIChat() {
                 {msg.role === 'user' ? <User className="w-4 h-4 text-slate-300" /> : <Bot className="w-4 h-4 text-indigo-500" />}
               </div>
               <div className={clsx(
-                'max-w-[85%] rounded-xl p-4 text-xs leading-relaxed shadow-sm transition-all duration-300',
+                'max-w-[85%] rounded-2xl p-4 text-sm leading-relaxed shadow-lg transition-all duration-300',
                 msg.role === 'user' 
-                  ? 'bg-slate-900 text-slate-200 rounded-tr-none border border-slate-800' 
-                  : 'bg-slate-900/40 text-slate-300 rounded-tl-none border border-slate-900/60'
+                  ? 'bg-indigo-600 text-white rounded-tr-none shadow-indigo-900/20' 
+                  : 'bg-slate-900 text-slate-200 rounded-tl-none border border-slate-800 shadow-black/40'
               )}>
                 {msg.image && (
-                  <div className="mb-3 rounded-lg overflow-hidden border border-slate-800 group/img relative">
+                  <div className="mb-3 rounded-lg overflow-hidden border border-white/10 group/img relative">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={msg.image} alt="User upload" className="max-w-full h-auto" />
+                    <img src={msg.image} alt="User upload" className="max-w-full h-auto max-h-80 object-contain" />
                   </div>
                 )}
-                <div className="prose prose-invert prose-sm max-w-none prose-headings:text-slate-100 prose-strong:text-blue-400 prose-code:text-blue-300 prose-pre:bg-slate-950 prose-pre:border prose-pre:border-slate-800 text-xs text-slate-300">
+                <div className="prose prose-invert prose-sm max-w-none prose-headings:text-white prose-strong:text-blue-300 prose-code:text-blue-200 prose-pre:bg-slate-950 prose-pre:border prose-pre:border-slate-800 text-sm">
                   {renderMessageContent(msg.content)}
                 </div>
               </div>
             </div>
           ))}
           {loading && (
-            <div className="flex gap-3 animate-in fade-in slide-in-from-bottom-2">
+            <div className="flex gap-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
               <div className="w-8 h-8 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
                 <Bot className="w-4 h-4 text-indigo-500" />
               </div>
-              <div className="bg-slate-900/40 border border-slate-900/60 rounded-xl rounded-tl-none p-4 flex items-center gap-3">
-                <div className="flex gap-1">
-                  <div className="w-1 h-1 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.3s]" />
-                  <div className="w-1 h-1 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.15s]" />
-                  <div className="w-1 h-1 bg-indigo-500 rounded-full animate-bounce" />
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl rounded-tl-none p-4 flex flex-col gap-2 shadow-lg">
+                <div className="flex items-center gap-3">
+                  <div className="flex gap-1">
+                    <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                    <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                    <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce" />
+                  </div>
+                  <span className="text-xs text-slate-400 font-medium tracking-wide">
+                    {ragStatus || 'AI 正在深度思考中...'}
+                  </span>
                 </div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{ragStatus || 'THINKING...'}</span>
               </div>
             </div>
           )}

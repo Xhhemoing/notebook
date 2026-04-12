@@ -167,6 +167,7 @@ function reducer(state: AppState, action: Action): AppState {
     case 'DELETE_MEMORY':
       return { ...state, memories: state.memories.filter((m) => m.id !== action.payload) };
     case 'ADD_NODE':
+      if (state.knowledgeNodes.some(n => n.id === action.payload.id)) return state;
       return { ...state, knowledgeNodes: [...state.knowledgeNodes, action.payload] };
     case 'UPDATE_NODE':
       return {
@@ -187,7 +188,8 @@ function reducer(state: AppState, action: Action): AppState {
     case 'BATCH_ADD_MEMORIES':
       return { ...state, memories: [...action.payload, ...state.memories] };
     case 'BATCH_ADD_NODES':
-      return { ...state, knowledgeNodes: [...state.knowledgeNodes, ...action.payload] };
+      const newNodes = action.payload.filter(newNode => !state.knowledgeNodes.some(existingNode => existingNode.id === newNode.id));
+      return { ...state, knowledgeNodes: [...state.knowledgeNodes, ...newNodes] };
     case 'BATCH_DELETE_NODES':
       const updatedMemoriesBatch = state.memories.map(m => ({
         ...m,
