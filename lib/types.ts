@@ -215,6 +215,7 @@ export type Action =
   | { type: 'UPDATE_SETTINGS'; payload: Partial<Settings> }
   | { type: 'SET_CORRELATIONS'; payload: KnowledgeNode[] }
   | { type: 'SET_LAST_SYNCED'; payload: number }
+  | { type: 'SET_LAST_SYNC'; payload: number }
   | { type: 'LOAD_STATE'; payload: AppState }
   | { type: 'ADD_LOG'; payload: Omit<AILog, 'id' | 'timestamp'> & { id?: string; timestamp?: number } }
   | { type: 'CLEAR_LOGS' }
