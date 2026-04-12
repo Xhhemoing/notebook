@@ -50,25 +50,6 @@ export async function deleteFile(id: string) {
   }
 }
 
-async function saveState(state: AppState) {
-  try {
-    const db = await initDB();
-    await db.put(STORE_NAME, state, 'main-state');
-  } catch (e) {
-    console.error('Failed to save state to IDB', e);
-  }
-}
-
-async function loadState(): Promise<AppState | null> {
-  try {
-    const db = await initDB();
-    return await db.get(STORE_NAME, 'main-state');
-  } catch (e) {
-    console.error('Failed to load state from IDB', e);
-    return null;
-  }
-}
-
 const initialNodes: KnowledgeNode[] = [
   { id: '1', subject: '数学', name: '高中数学', parentId: null, order: 1 },
   { id: '1.1', subject: '数学', name: '代数', parentId: '1', order: 1 },
@@ -152,6 +133,67 @@ const initialState: AppState = {
   inputHistory: [],
   resources: []
 };
+
+async function saveState(state: AppState) {
+  try {
+    const db = await initDB();
+    await db.put(STORE_NAME, state, 'main-state');
+    
+    // Sync to D1 if on Cloudflare
+    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
+      fetch('/api/sync', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'push_memories', payload: state.memories })
+      }).catch(e => console.error('D1 Sync failed', e));
+      
+      fetch('/api/sync', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'push_nodes', payload: state.knowledgeNodes })
+      }).catch(e => console.error('D1 Sync failed', e));
+    }
+  } catch (e) {
+    console.error('Failed to save state to IDB', e);
+  }
+}
+
+async function loadState(): Promise<AppState | null> {
+  try {
+    const db = await initDB();
+    const localState = await db.get(STORE_NAME, 'main-state');
+    
+    // Try to pull from D1 if on Cloudflare
+    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
+      try {
+        const res = await fetch('/api/sync', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'pull' })
+        });
+        if (res.ok) {
+          const { data } = await res.json();
+          if (data) {
+            // Merge D1 data with local state
+            return {
+              ...(localState || initialState),
+              ...data,
+              // Prefer D1 data for core entities
+              memories: data.memories || localState?.memories || [],
+              knowledgeNodes: data.knowledgeNodes || localState?.knowledgeNodes || [],
+              textbooks: data.textbooks || localState?.textbooks || [],
+              resources: data.resources || localState?.resources || []
+            };
+          }
+        }
+      } catch (e) {
+        console.error('Failed to pull from D1', e);
+      }
+    }
+    
+    return localState;
+  } catch (e) {
+    console.error('Failed to load state from IDB', e);
+    return null;
+  }
+}
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {

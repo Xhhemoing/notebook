@@ -8,11 +8,6 @@ const MODELS = [
   { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite' },
 ];
 
-const EMBEDDING_MODELS = [
-  { id: 'text-embedding-004', name: 'Text Embedding 004' },
-  { id: 'gemini-embedding-2-preview', name: 'Gemini Embedding 2 Preview' },
-];
-
 export default function ModelAllocationSettings() {
   const { state, dispatch } = useAppContext();
 
@@ -20,8 +15,8 @@ export default function ModelAllocationSettings() {
     dispatch({ type: 'UPDATE_SETTINGS', payload: { [key]: value } });
   };
 
-  const renderModelSelect = (label: string, key: string, value: string, type: 'chat' | 'embedding' = 'chat') => {
-    const defaultModels = type === 'embedding' ? EMBEDDING_MODELS : MODELS;
+  const renderModelSelect = (label: string, key: string, value: string) => {
+    const isEmbedding = key === 'embeddingModel';
     
     return (
       <div>
@@ -31,31 +26,25 @@ export default function ModelAllocationSettings() {
           onChange={(e) => updateSetting(key, e.target.value)}
           className="w-full p-3 bg-slate-950 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none text-slate-200"
         >
-          <optgroup label="默认模型">
-            {defaultModels.map((m) => (
+          {isEmbedding ? (
+            <option value="gemini-embedding-2-preview">Gemini Embedding 2</option>
+          ) : (
+            MODELS.map((m) => (
               <option key={m.id} value={m.id}>{m.name}</option>
-            ))}
-          </optgroup>
-          {state.settings.customProviders && state.settings.customProviders.length > 0 && (
-            <optgroup label="自定义提供商模型">
-              {state.settings.customProviders.flatMap(p => 
-                p.models
-                  .filter(m => type === 'embedding' ? m.id.toLowerCase().includes('embed') : !m.id.toLowerCase().includes('embed'))
-                  .map(m => (
-                    <option key={`${p.id}:${m.id}`} value={`${p.id}:${m.id}`}>[{p.name}] {m.name}</option>
-                  ))
-              )}
-            </optgroup>
+            ))
           )}
-          {state.settings.customModels && state.settings.customModels.length > 0 && (
-            <optgroup label="收藏模型">
-              {state.settings.customModels
-                .filter(m => type === 'embedding' ? m.modelId.toLowerCase().includes('embed') : !m.modelId.toLowerCase().includes('embed'))
-                .map(m => (
-                  <option key={m.id} value={m.id}>[自定义] {m.name}</option>
-                ))}
-            </optgroup>
+          
+          {state.settings.customProviders?.flatMap(p => 
+            p.models
+              .filter(m => isEmbedding ? m.id.toLowerCase().includes('embed') : !m.id.toLowerCase().includes('embed'))
+              .map(m => (
+                <option key={`${p.id}:${m.id}`} value={`${p.id}:${m.id}`}>[{p.name}] {m.name}</option>
+              ))
           )}
+          
+          {state.settings.customModels?.filter(m => isEmbedding ? m.modelId.toLowerCase().includes('embed') : !m.modelId.toLowerCase().includes('embed')).map(m => (
+            <option key={m.id} value={m.id}>[自定义] {m.name}</option>
+          ))}
         </select>
       </div>
     );
@@ -74,7 +63,7 @@ export default function ModelAllocationSettings() {
             {renderModelSelect('AI 答疑模型', 'chatModel', state.settings.chatModel)}
             {renderModelSelect('知识图谱生成模型', 'graphModel', state.settings.graphModel)}
             {renderModelSelect('复习出题模型', 'reviewModel', state.settings.reviewModel)}
-            {renderModelSelect('向量化模型 (Embedding)', 'embeddingModel', state.settings.embeddingModel || 'gemini-embedding-2-preview', 'embedding')}
+            {renderModelSelect('向量化模型 (Embedding)', 'embeddingModel', state.settings.embeddingModel || 'gemini-embedding-2-preview')}
           </div>
         </div>
       </section>
