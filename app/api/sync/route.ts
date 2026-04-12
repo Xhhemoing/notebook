@@ -19,11 +19,13 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'pull') {
-      // Fetch all data from D1
-      const memories = await db.prepare('SELECT * FROM memories').all();
-      const nodes = await db.prepare('SELECT * FROM knowledge_nodes').all();
-      const textbooks = await db.prepare('SELECT * FROM textbooks').all();
-      const resources = await db.prepare('SELECT * FROM resources').all();
+      const { lastSynced = 0 } = payload || {};
+      
+      // Fetch only data updated after lastSynced
+      const memories = await db.prepare('SELECT * FROM memories WHERE updatedAt > ? OR createdAt > ?').bind(lastSynced, lastSynced).all();
+      const nodes = await db.prepare('SELECT * FROM knowledge_nodes WHERE updatedAt > ?').bind(lastSynced).all();
+      const textbooks = await db.prepare('SELECT * FROM textbooks WHERE updatedAt > ?').bind(lastSynced).all();
+      const resources = await db.prepare('SELECT * FROM resources WHERE updatedAt > ?').bind(lastSynced).all();
       
       return NextResponse.json({
         success: true,
@@ -45,7 +47,8 @@ export async function POST(req: NextRequest) {
             isFolder: !!r.isFolder,
             size: Number(r.size)
           }))
-        }
+        },
+        serverTime: Date.now()
       });
     }
 
@@ -53,10 +56,10 @@ export async function POST(req: NextRequest) {
       const items = payload as any[];
       if (items.length === 0) return NextResponse.json({ success: true });
 
-      // Batch upsert memories
+      const now = Date.now();
       const statements = items.map(m => db.prepare(`
-        INSERT INTO memories (id, subject, content, functionType, purposeType, isMistake, wrongAnswer, errorReason, visualDescription, notes, knowledgeNodeIds, createdAt, embedding)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO memories (id, subject, content, functionType, purposeType, isMistake, wrongAnswer, errorReason, visualDescription, notes, knowledgeNodeIds, createdAt, updatedAt, embedding)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           subject = excluded.subject,
           content = excluded.content,
@@ -68,41 +71,37 @@ export async function POST(req: NextRequest) {
           visualDescription = excluded.visualDescription,
           notes = excluded.notes,
           knowledgeNodeIds = excluded.knowledgeNodeIds,
+          updatedAt = excluded.updatedAt,
           embedding = excluded.embedding
       `).bind(
         m.id, m.subject, m.content, m.functionType, m.purposeType, m.isMistake ? 1 : 0, 
         m.wrongAnswer || null, m.errorReason || null, m.visualDescription || null, m.notes || null,
-        JSON.stringify(m.knowledgeNodeIds || []), m.createdAt,
+        JSON.stringify(m.knowledgeNodeIds || []), m.createdAt, now,
         m.embedding ? JSON.stringify(m.embedding) : null
       ));
 
       await db.batch(statements);
-      return NextResponse.json({ success: true });
+      return NextResponse.json({ success: true, serverTime: now });
     }
 
     if (action === 'push_nodes') {
       const items = payload as any[];
       if (items.length === 0) return NextResponse.json({ success: true });
 
+      const now = Date.now();
       const statements = items.map(n => db.prepare(`
-        INSERT INTO knowledge_nodes (id, subject, name, parentId, "order")
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO knowledge_nodes (id, subject, name, parentId, "order", updatedAt)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           subject = excluded.subject,
           name = excluded.name,
           parentId = excluded.parentId,
-          "order" = excluded."order"
-      `).bind(n.id, n.subject, n.name, n.parentId, n.order || 0));
+          "order" = excluded."order",
+          updatedAt = excluded.updatedAt
+      `).bind(n.id, n.subject, n.name, n.parentId, n.order || 0, now));
 
       await db.batch(statements);
-      return NextResponse.json({ success: true });
-    }
-
-    if (action === 'delete_memories') {
-      const ids = payload as string[];
-      if (ids.length === 0) return NextResponse.json({ success: true });
-      await db.prepare(`DELETE FROM memories WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).run();
-      return NextResponse.json({ success: true });
+      return NextResponse.json({ success: true, serverTime: now });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });

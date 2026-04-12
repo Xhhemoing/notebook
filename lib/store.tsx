@@ -50,6 +50,68 @@ export async function deleteFile(id: string) {
   }
 }
 
+async function saveState(state: AppState) {
+  try {
+    const db = await initDB();
+    await db.put(STORE_NAME, state, 'main-state');
+  } catch (e) {
+    console.error('Failed to save state to IDB', e);
+  }
+}
+
+async function loadState(): Promise<AppState | null> {
+  try {
+    const db = await initDB();
+    return await db.get(STORE_NAME, 'main-state');
+  } catch (e) {
+    console.error('Failed to load state from IDB', e);
+    return null;
+  }
+}
+
+export async function syncWithD1(state: AppState, dispatch: React.Dispatch<Action>) {
+  if (typeof window === 'undefined' || window.location.hostname === 'localhost') return;
+
+  try {
+    // 1. Pull incremental changes
+    const pullRes = await fetch('/api/sync', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'pull', payload: { lastSynced: state.lastSynced || 0 } })
+    });
+    
+    if (pullRes.ok) {
+      const { data, serverTime } = await pullRes.json();
+      if (data) {
+        if (data.memories?.length > 0) dispatch({ type: 'BATCH_ADD_MEMORIES', payload: data.memories });
+        if (data.knowledgeNodes?.length > 0) dispatch({ type: 'BATCH_ADD_NODES', payload: data.knowledgeNodes });
+        dispatch({ type: 'SET_LAST_SYNC', payload: serverTime });
+      }
+    }
+
+    // 2. Push local changes (simplified for now: push all if lastSynced is 0, otherwise just push recent)
+    // In a real incremental sync, we'd track 'updatedAt' locally too.
+    const pushMemories = state.memories.filter(m => m.createdAt > (state.lastSynced || 0));
+    if (pushMemories.length > 0) {
+      await fetch('/api/sync', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'push_memories', payload: pushMemories })
+      });
+    }
+
+    const pushNodes = state.knowledgeNodes.filter(n => (n as any).updatedAt > (state.lastSynced || 0));
+    if (pushNodes.length > 0) {
+      await fetch('/api/sync', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'push_nodes', payload: pushNodes })
+      });
+    }
+
+  } catch (e) {
+    console.error('D1 Sync failed', e);
+    throw e;
+  }
+}
+
 const initialNodes: KnowledgeNode[] = [
   { id: '1', subject: '数学', name: '高中数学', parentId: null, order: 1 },
   { id: '1.1', subject: '数学', name: '代数', parentId: '1', order: 1 },
@@ -128,72 +190,14 @@ const initialState: AppState = {
     enableLogging: true,
     minReviewDifficulty: 0,
     maxReviewDifficulty: 10,
+    syncInterval: 300, // 5 minutes
+    enableAutoSync: true,
   },
   logs: [],
   inputHistory: [],
-  resources: []
+  resources: [],
+  lastSynced: 0
 };
-
-async function saveState(state: AppState) {
-  try {
-    const db = await initDB();
-    await db.put(STORE_NAME, state, 'main-state');
-    
-    // Sync to D1 if on Cloudflare
-    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
-      fetch('/api/sync', {
-        method: 'POST',
-        body: JSON.stringify({ action: 'push_memories', payload: state.memories })
-      }).catch(e => console.error('D1 Sync failed', e));
-      
-      fetch('/api/sync', {
-        method: 'POST',
-        body: JSON.stringify({ action: 'push_nodes', payload: state.knowledgeNodes })
-      }).catch(e => console.error('D1 Sync failed', e));
-    }
-  } catch (e) {
-    console.error('Failed to save state to IDB', e);
-  }
-}
-
-async function loadState(): Promise<AppState | null> {
-  try {
-    const db = await initDB();
-    const localState = await db.get(STORE_NAME, 'main-state');
-    
-    // Try to pull from D1 if on Cloudflare
-    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
-      try {
-        const res = await fetch('/api/sync', {
-          method: 'POST',
-          body: JSON.stringify({ action: 'pull' })
-        });
-        if (res.ok) {
-          const { data } = await res.json();
-          if (data) {
-            // Merge D1 data with local state
-            return {
-              ...(localState || initialState),
-              ...data,
-              // Prefer D1 data for core entities
-              memories: data.memories || localState?.memories || [],
-              knowledgeNodes: data.knowledgeNodes || localState?.knowledgeNodes || [],
-              textbooks: data.textbooks || localState?.textbooks || [],
-              resources: data.resources || localState?.resources || []
-            };
-          }
-        }
-      } catch (e) {
-        console.error('Failed to pull from D1', e);
-      }
-    }
-    
-    return localState;
-  } catch (e) {
-    console.error('Failed to load state from IDB', e);
-    return null;
-  }
-}
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -265,6 +269,8 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_CORRELATIONS':
       return { ...state, knowledgeNodes: action.payload };
     case 'SET_LAST_SYNCED':
+      return { ...state, lastSynced: action.payload };
+    case 'SET_LAST_SYNC':
       return { ...state, lastSynced: action.payload };
     case 'LOAD_STATE':
       return { 
@@ -401,6 +407,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return () => clearTimeout(timeoutId);
     }
   }, [state, isMounted]);
+
+  useEffect(() => {
+    if (isMounted && state.settings.enableAutoSync && state.settings.syncInterval > 0) {
+      const interval = setInterval(() => {
+        syncWithD1(state, dispatch).catch(() => {});
+      }, state.settings.syncInterval * 1000);
+      return () => clearInterval(interval);
+    }
+  }, [isMounted, state.settings.enableAutoSync, state.settings.syncInterval, state.lastSynced]);
 
   if (!isMounted) return null; // Prevent hydration mismatch
 

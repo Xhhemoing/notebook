@@ -1,6 +1,7 @@
 import React from 'react';
 import { useAppContext } from '@/lib/store';
 import { User, BookOpen, Settings2 } from 'lucide-react';
+import { clsx } from 'clsx';
 
 export default function GeneralSettings() {
   const { state, dispatch } = useAppContext();
@@ -26,6 +27,49 @@ export default function GeneralSettings() {
               <option value="large">大 (更易读)</option>
             </select>
             <p className="text-xs text-slate-500 mt-2">调整全局字体大小，以适应不同的屏幕和阅读习惯。</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-sm">
+        <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2">
+          <Settings2 className="w-4 h-4" />
+          数据同步设置 (Cloudflare D1)
+        </h3>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between p-3 bg-slate-950 border border-slate-800 rounded-xl">
+            <div>
+              <label className="block text-sm font-medium text-slate-300">启用自动同步</label>
+              <p className="text-xs text-slate-500">在后台自动同步数据到云端数据库。</p>
+            </div>
+            <button
+              onClick={() => dispatch({ type: 'UPDATE_SETTINGS', payload: { enableAutoSync: !state.settings.enableAutoSync } })}
+              className={clsx(
+                "w-10 h-5 rounded-full transition-colors relative",
+                state.settings.enableAutoSync ? "bg-indigo-600" : "bg-slate-800"
+              )}
+            >
+              <div className={clsx(
+                "absolute top-1 w-3 h-3 bg-white rounded-full transition-all",
+                state.settings.enableAutoSync ? "left-6" : "left-1"
+              )} />
+            </button>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">自动同步频率</label>
+            <select
+              value={state.settings.syncInterval}
+              onChange={(e) => dispatch({ type: 'UPDATE_SETTINGS', payload: { syncInterval: Number(e.target.value) } })}
+              className="w-full p-3 bg-slate-950 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none text-slate-200"
+            >
+              <option value={60}>每 1 分钟</option>
+              <option value={300}>每 5 分钟 (推荐)</option>
+              <option value={1800}>每 30 分钟</option>
+              <option value={3600}>每 1 小时</option>
+              <option value={0}>仅手动同步</option>
+            </select>
+            <p className="text-xs text-slate-500 mt-2">设置后台自动增量同步的时间间隔。</p>
           </div>
         </div>
       </section>

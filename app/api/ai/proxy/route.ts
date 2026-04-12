@@ -24,8 +24,8 @@ export async function POST(req: NextRequest) {
     });
 
     if (!response.ok) {
-      const error = await response.text();
-      return NextResponse.json({ error: `Upstream API error: ${error}` }, { status: response.status });
+      const errorText = await response.text();
+      return NextResponse.json({ error: errorText }, { status: response.status });
     }
 
     const data = await response.json();

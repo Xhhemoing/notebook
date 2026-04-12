@@ -102,6 +102,8 @@ export interface Settings {
   fsrsUpdateFrequency?: string;
   customModels?: CustomModel[]; // Legacy
   customProviders?: CustomProvider[];
+  syncInterval: number; // in seconds, 0 means manual only
+  enableAutoSync: boolean;
 }
 
 export interface AILog {

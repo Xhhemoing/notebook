@@ -1,13 +1,28 @@
 'use client';
 
-import { BookOpen, BrainCircuit, MessageSquare, Network, PlusCircle, Settings, BookX, ChevronLeft, ChevronRight, GraduationCap, Search, User, LayoutDashboard, TrendingDown, Database } from 'lucide-react';
+import { BookOpen, BrainCircuit, MessageSquare, Network, PlusCircle, Settings, BookX, ChevronLeft, ChevronRight, GraduationCap, Search, User, LayoutDashboard, TrendingDown, Database, RefreshCw, Loader2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useState } from 'react';
+import { useAppContext, syncWithD1 } from '@/lib/store';
 
 export type View = 'dashboard' | 'input' | 'graph' | 'memory' | 'mistakes' | 'chat' | 'settings' | 'review' | 'textbooks' | 'resources';
 
 export function Sidebar({ currentView, setView }: { currentView: View; setView: (v: View) => void }) {
+  const { state, dispatch } = useAppContext();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleManualSync = async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    try {
+      await syncWithD1(state, dispatch);
+    } catch (e) {
+      console.error('Manual sync failed', e);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   const navItems = [
     { id: 'dashboard', label: '总览', icon: LayoutDashboard, color: 'text-blue-400' },
@@ -89,6 +104,23 @@ export function Sidebar({ currentView, setView }: { currentView: View; setView: 
 
       {/* Footer */}
       <div className="p-4 border-t border-slate-900 space-y-3">
+        <button
+          onClick={handleManualSync}
+          disabled={isSyncing}
+          className={clsx(
+            'w-full flex items-center gap-3 py-2.5 rounded-xl text-[0.65rem] font-bold uppercase tracking-widest transition-all duration-300 group',
+            isCollapsed ? 'justify-center px-0' : 'px-3',
+            'text-slate-500 hover:bg-slate-900/50 hover:text-slate-300'
+          )}
+        >
+          {isSyncing ? (
+            <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-indigo-500" />
+          ) : (
+            <RefreshCw className="w-3.5 h-3.5 shrink-0 text-slate-700 group-hover:text-slate-500" />
+          )}
+          {!isCollapsed && <span className="whitespace-nowrap">{isSyncing ? '同步中...' : '手动同步'}</span>}
+        </button>
+
         <button
           onClick={() => setView('settings')}
           className={clsx(
