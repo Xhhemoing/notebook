@@ -276,18 +276,18 @@ export function DataManager() {
   const functionTypes = Array.from(new Set(state.memories.map(m => m.functionType)));
 
   return (
-    <div className="p-8 max-w-6xl mx-auto space-y-8 text-slate-200 bg-black min-h-full">
+    <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-6 md:space-y-8 text-slate-200 bg-black min-h-full">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-black text-white tracking-tighter mb-2 uppercase flex items-center gap-3">
-            <Database className="w-8 h-8 text-indigo-500" />
+          <h2 className="text-2xl md:text-3xl font-black text-white tracking-tighter mb-2 uppercase flex items-center gap-3">
+            <Database className="w-6 h-6 md:w-8 md:h-8 text-indigo-500" />
             数据管理中心
           </h2>
-          <p className="text-slate-500 text-sm font-medium uppercase tracking-wider">
+          <p className="text-slate-500 text-xs md:text-sm font-medium uppercase tracking-wider">
             管理所有本地存储的数据，当前总占用: <span className="text-indigo-400">{getStorageSize()}</span>
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={handleExportAll}
             className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium transition-colors"

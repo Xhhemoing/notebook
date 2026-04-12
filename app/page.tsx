@@ -19,6 +19,7 @@ import { useEffect } from 'react';
 
 function MainLayout({ currentView, setCurrentView }: { currentView: View, setCurrentView: (v: View) => void }) {
   const { state } = useAppContext();
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     const fontSizeMap: Record<string, string> = {
@@ -33,9 +34,14 @@ function MainLayout({ currentView, setCurrentView }: { currentView: View, setCur
 
   return (
     <div className="flex h-screen bg-black font-sans overflow-hidden text-slate-200">
-      <Sidebar currentView={currentView} setView={setCurrentView} />
-      <main className="flex-1 flex flex-col h-full overflow-hidden">
-        <SubjectSelector />
+      <Sidebar 
+        currentView={currentView} 
+        setView={(v) => { setCurrentView(v); setIsMobileMenuOpen(false); }} 
+        isMobileMenuOpen={isMobileMenuOpen}
+        setIsMobileMenuOpen={setIsMobileMenuOpen}
+      />
+      <main className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
+        <SubjectSelector onMenuClick={() => setIsMobileMenuOpen(true)} />
         <div className="flex-1 overflow-y-auto relative">
           {currentView === 'dashboard' && <Dashboard />}
           {currentView === 'textbooks' && <TextbookModule />}

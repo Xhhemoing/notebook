@@ -34,9 +34,9 @@ export function Settings() {
   };
 
   return (
-    <div className="flex h-full bg-[#1e1e1e] text-slate-200 overflow-hidden">
-      {/* Main Sidebar */}
-      <div className="w-48 bg-[#1e1e1e] border-r border-slate-800 flex flex-col shrink-0">
+    <div className="flex flex-col md:flex-row h-full bg-[#1e1e1e] text-slate-200 overflow-hidden">
+      {/* Main Sidebar (Desktop) */}
+      <div className="hidden md:flex w-48 bg-[#1e1e1e] border-r border-slate-800 flex-col shrink-0">
         <div className="p-4">
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -66,22 +66,41 @@ export function Settings() {
         </div>
       </div>
 
+      {/* Mobile Top Menu */}
+      <div className="md:hidden flex overflow-x-auto border-b border-slate-800 bg-[#1e1e1e] shrink-0 no-scrollbar p-2 gap-2">
+        {MENU_ITEMS.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => setActiveTab(item.id)}
+            className={clsx(
+              "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors",
+              activeTab === item.id 
+                ? "bg-slate-800 text-slate-200" 
+                : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-300"
+            )}
+          >
+            <item.icon className="w-3.5 h-3.5" />
+            {item.label}
+          </button>
+        ))}
+      </div>
+
       {/* Content Area */}
       <div className="flex-1 flex flex-col overflow-hidden bg-[#1e1e1e]">
-        <div className="h-14 border-b border-slate-800 flex items-center justify-between px-6 shrink-0">
-          <h2 className="text-lg font-medium text-slate-200">
+        <div className="h-14 border-b border-slate-800 flex items-center justify-between px-4 md:px-6 shrink-0">
+          <h2 className="text-base md:text-lg font-medium text-slate-200">
             {MENU_ITEMS.find(i => i.id === activeTab)?.label}
           </h2>
           <button
             onClick={handleSave}
-            className="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
+            className="flex items-center gap-2 px-3 py-1.5 md:px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs md:text-sm font-medium transition-colors shadow-sm"
           >
             <Save className="w-4 h-4" />
             {saved ? '已保存' : '保存设置'}
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar">
           <div className="max-w-5xl mx-auto">
             {activeTab === 'model-service' && (
               <div className="space-y-8">

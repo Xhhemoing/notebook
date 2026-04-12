@@ -7,7 +7,17 @@ import { useAppContext, syncWithD1 } from '@/lib/store';
 
 export type View = 'dashboard' | 'input' | 'graph' | 'memory' | 'mistakes' | 'chat' | 'settings' | 'review' | 'textbooks' | 'resources';
 
-export function Sidebar({ currentView, setView }: { currentView: View; setView: (v: View) => void }) {
+export function Sidebar({ 
+  currentView, 
+  setView,
+  isMobileMenuOpen,
+  setIsMobileMenuOpen
+}: { 
+  currentView: View; 
+  setView: (v: View) => void;
+  isMobileMenuOpen?: boolean;
+  setIsMobileMenuOpen?: (v: boolean) => void;
+}) {
   const { state, dispatch } = useAppContext();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -37,10 +47,20 @@ export function Sidebar({ currentView, setView }: { currentView: View; setView: 
   ];
 
   return (
-    <div className={clsx(
-      "bg-black text-slate-500 flex flex-col h-full border-r border-slate-900 transition-all duration-500 ease-in-out relative",
-      isCollapsed ? "w-16" : "w-40"
-    )}>
+    <>
+      {/* Mobile Overlay */}
+      {isMobileMenuOpen && (
+        <div 
+          className="md:hidden fixed inset-0 bg-black/80 z-40 backdrop-blur-sm"
+          onClick={() => setIsMobileMenuOpen?.(false)}
+        />
+      )}
+      
+      <div className={clsx(
+        "bg-black text-slate-500 flex flex-col h-full border-r border-slate-900 transition-all duration-500 ease-in-out absolute md:relative z-50",
+        isCollapsed ? "w-16" : "w-48 md:w-40",
+        isMobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+      )}>
       {/* Header */}
       <div className={clsx("p-2 flex items-center mb-1", isCollapsed ? "justify-center" : "gap-2")}>
         <div className="w-6 h-6 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0 shadow-2xl shadow-indigo-600/40 rotate-3 hover:rotate-0 transition-transform duration-300">
@@ -157,10 +177,11 @@ export function Sidebar({ currentView, setView }: { currentView: View; setView: 
       {/* Collapse Toggle */}
       <button 
         onClick={() => setIsCollapsed(!isCollapsed)}
-        className="absolute -right-4 top-1/2 -translate-y-1/2 bg-slate-900 border border-slate-800 text-slate-600 rounded-2xl p-2 hover:text-white transition-all z-20 shadow-2xl hover:scale-110 active:scale-90"
+        className="hidden md:block absolute -right-4 top-1/2 -translate-y-1/2 bg-slate-900 border border-slate-800 text-slate-600 rounded-2xl p-2 hover:text-white transition-all z-20 shadow-2xl hover:scale-110 active:scale-90"
       >
         {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
       </button>
     </div>
+    </>
   );
 }
