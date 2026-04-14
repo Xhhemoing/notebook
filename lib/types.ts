@@ -87,9 +87,13 @@ export interface Settings {
   chatModel: string;
   graphModel: string;
   reviewModel: string;
+  summaryModel?: string;    // Mistake summary & analysis
+  translationModel?: string; // Translation / language tasks
+  ragModel?: string;         // RAG semantic retrieval
   embeddingModel?: string;
   cloudflareEndpoint?: string;
   cloudflareToken?: string;
+  syncKey?: string; // Per-user key to scope D1 data, prevents conflicts in multi-user deployments
   homeworkPreferences?: string;
   userSymbols?: string; // Meaning of user symbols
   studentProfile?: string; // AI's perception of the student

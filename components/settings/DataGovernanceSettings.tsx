@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '@/lib/store';
-import { Shield, Trash2, RefreshCw, AlertTriangle, Sparkles, ShieldAlert, Filter, Database, Search, Zap, Loader2, X } from 'lucide-react';
+import { Shield, Trash2, RefreshCw, AlertTriangle, Sparkles, ShieldAlert, Filter, Database, Search, Zap, Loader2, X, BarChart2 } from 'lucide-react';
 import { Memory, KnowledgeNode, Subject } from '@/lib/types';
 import clsx from 'clsx';
 import { v4 as uuidv4 } from 'uuid';
@@ -259,8 +259,65 @@ export default function DataGovernanceSettings() {
     });
   };
 
+  const handleClearAllData = () => {
+    if (confirm('警告：此操作将永久删除所有本地数据（包括记忆、知识图谱、课本等），且无法恢复！\n\n您确定要继续吗？')) {
+      if (confirm('最后确认：真的要清空所有数据吗？')) {
+        localStorage.removeItem('aistudio_state');
+        window.location.reload();
+      }
+    }
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
+      {/* ── 数据统计 ── */}
+      <section className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-sm">
+        <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2">
+          <BarChart2 className="w-4 h-4" />
+          数据概览
+        </h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div className="p-4 bg-slate-950 rounded-xl border border-slate-900">
+            <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-1">总记忆数</p>
+            <p className="text-2xl font-black text-white">{state.memories.length}</p>
+          </div>
+          <div className="p-4 bg-slate-950 rounded-xl border border-slate-900">
+            <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-1">知识节点</p>
+            <p className="text-2xl font-black text-white">{state.knowledgeNodes.length}</p>
+          </div>
+          <div className="p-4 bg-slate-950 rounded-xl border border-slate-900">
+            <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-1">课本文件</p>
+            <p className="text-2xl font-black text-white">{state.textbooks.length}</p>
+          </div>
+          <div className="p-4 bg-slate-950 rounded-xl border border-slate-900">
+            <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-1">错题比例</p>
+            <p className="text-2xl font-black text-white">
+              {state.memories.length > 0 ? ((state.memories.filter(m => m.isMistake).length / state.memories.length) * 100).toFixed(1) : 0}%
+            </p>
+          </div>
+        </div>
+        <div className="space-y-3">
+          {Array.from(new Set(state.memories.map(m => m.subject))).map(subject => {
+            const count = state.memories.filter(m => m.subject === subject).length;
+            const percentage = (count / state.memories.length) * 100;
+            return (
+              <div key={subject} className="space-y-1">
+                <div className="flex justify-between text-xs text-slate-400">
+                  <span>{subject}</span>
+                  <span>{count} 条 ({percentage.toFixed(1)}%)</span>
+                </div>
+                <div className="h-1.5 bg-slate-950 rounded-full overflow-hidden">
+                  <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${percentage}%` }} />
+                </div>
+              </div>
+            );
+          })}
+          {state.memories.length === 0 && (
+            <p className="text-xs text-slate-500 text-center py-2">暂无记忆数据</p>
+          )}
+        </div>
+      </section>
+
       {/* One-Click Cleanup Banner */}
       <div className="bg-gradient-to-r from-indigo-600/20 to-purple-600/20 p-6 rounded-2xl border border-indigo-500/30 flex items-center justify-between gap-6">
         <div className="flex items-center gap-4">
@@ -439,6 +496,26 @@ export default function DataGovernanceSettings() {
           </button>
         </section>
       </div>
+
+      {/* ── 危险区域 ── */}
+      <section className="bg-slate-900 p-6 rounded-2xl border border-red-900/20 shadow-sm">
+        <h3 className="text-sm font-semibold text-red-500 uppercase tracking-wider mb-4 flex items-center gap-2">
+          <Trash2 className="w-4 h-4" />
+          危险操作
+        </h3>
+        <div className="p-4 bg-red-950/20 border border-red-900/30 rounded-xl flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-red-400">清空所有本地数据</p>
+            <p className="text-xs text-red-500/80 mt-0.5">此操作不可逆，将删除所有记忆、知识图谱和设置。</p>
+          </div>
+          <button
+            onClick={handleClearAllData}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors"
+          >
+            清空数据
+          </button>
+        </div>
+      </section>
 
       {/* Custom Modal */}
       {modalConfig.isOpen && (

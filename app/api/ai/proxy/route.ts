@@ -10,7 +10,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'API Key is required' }, { status: 400 });
     }
 
-    const response = await fetch(baseUrl || 'https://api.openai.com/v1/chat/completions', {
+    let targetUrl = baseUrl || 'https://api.openai.com/v1/chat/completions';
+    
+    // Ensure baseUrl is actually a chat completions endpoint for OpenAI-compatible providers
+    if (baseUrl && !baseUrl.includes('/chat/completions')) {
+      const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+      targetUrl = `${cleanBaseUrl}/chat/completions`;
+    }
+
+    const response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
