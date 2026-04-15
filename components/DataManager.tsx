@@ -570,7 +570,7 @@ export function DataManager() {
                 </button>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0" onClick={() => toggleCollapse(m.id)}>
+                    <div className="flex-1 min-w-0" onClick={() => toggleExpand(m.id)}>
                       <div className="flex items-center gap-2 mb-2 cursor-pointer">
                         <span className="px-2 py-0.5 bg-red-500/10 text-red-400 rounded text-[10px] font-bold uppercase tracking-widest">
                           {m.subject} 错题
@@ -591,7 +591,7 @@ export function DataManager() {
                           </div>
                         </div>
                       ) : (
-                        <div className={clsx("space-y-2", collapsedItems.has(m.id) ? "line-clamp-2" : "")}>
+                        <div className={clsx("space-y-2", !expandedItems.has(m.id) ? "line-clamp-2" : "")}>
                           <p className="text-sm text-slate-300 font-medium">{m.content}</p>
                           {m.wrongAnswer && <p className="text-xs text-red-400">错误答案: {m.wrongAnswer}</p>}
                           {m.errorReason && <p className="text-xs text-orange-400">错误原因: {m.errorReason}</p>}

@@ -116,7 +116,7 @@ export default function AISettings() {
         }));
         
         setFetchedModels(newModels);
-        setSelectedIds(new Set(newModels.map(m => m.id))); // Default select all
+        setSelectedIds(new Set(newModels.map((m: { id: string }) => m.id))); // Default select all
         setShowImportModal(true);
       } else {
         throw new Error('返回数据格式不正确，未找到 data 数组');
@@ -162,7 +162,7 @@ export default function AISettings() {
     const provider = providers.find(p => p.id === selectedProviderId);
     if (!provider) return;
 
-    const toImport = fetchedModels.filter(m => selectedIds.has(m.id));
+    const toImport = fetchedModels.filter((m: { id: string }) => selectedIds.has(m.id));
     const existingModels = provider.models || [];
     const mergedModels = [...existingModels];
 
@@ -186,7 +186,7 @@ export default function AISettings() {
     setSelectedIds(next);
   };
 
-  const filteredFetchedModels = fetchedModels.filter(m => 
+  const filteredFetchedModels = fetchedModels.filter((m: { id: string }) => 
     m.id.toLowerCase().includes(modelSearch.toLowerCase())
   );
 
@@ -394,7 +394,7 @@ export default function AISettings() {
               </div>
               <div className="flex gap-2 shrink-0">
                 <button 
-                  onClick={() => setSelectedIds(new Set(fetchedModels.map(m => m.id)))}
+                  onClick={() => setSelectedIds(new Set(fetchedModels.map((m: { id: string }) => m.id)))}
                   className="text-xs text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1 bg-indigo-500/10 rounded"
                 >
                   全选
