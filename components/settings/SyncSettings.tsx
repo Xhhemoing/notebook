@@ -18,7 +18,7 @@ export default function SyncSettings() {
         const success = await pushToCloudflare(state, state.settings.cloudflareEndpoint || '', state.settings.cloudflareToken || '');
         alert(success ? '同步到云端成功！' : '同步到云端失败，请检查配置。');
       } else {
-        const cloudState = await pullFromCloudflare(state.settings.cloudflareEndpoint || '', state.settings.cloudflareToken || '');
+        const cloudState = await pullFromCloudflare(state.settings.cloudflareEndpoint || '', state.settings.cloudflareToken || '', state.settings.syncKey || '');
         if (cloudState) {
           dispatch({ type: 'LOAD_STATE', payload: cloudState });
           alert('从云端恢复成功！');
@@ -151,6 +151,19 @@ export default function SyncSettings() {
                 value={state.settings.cloudflareToken || ''}
                 onChange={(e) => dispatch({ type: 'UPDATE_SETTINGS', payload: { cloudflareToken: e.target.value } })}
                 placeholder="••••••••••••••••"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 transition-colors text-slate-200"
+              />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <label className="text-xs font-medium text-slate-400 flex items-center gap-1">
+                数据隔离密钥 (Sync Key)
+                <span className="text-[10px] text-slate-500 font-normal">(用于隔离多用户数据，不可泄露)</span>
+              </label>
+              <input
+                type="password"
+                value={state.settings.syncKey || ''}
+                onChange={(e) => dispatch({ type: 'UPDATE_SETTINGS', payload: { syncKey: e.target.value } })}
+                placeholder="输入您的私有同步密钥"
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 transition-colors text-slate-200"
               />
             </div>

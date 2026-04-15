@@ -2,11 +2,21 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const runtime = 'edge';
 
-// Generic handler for syncing data to Cloudflare D1
+// Generic handler for syncing data to Cloudflare D1 with user isolation
 export async function POST(req: NextRequest) {
   try {
+    const authHeader = req.headers.get('Authorization');
     const data = await req.json();
-    const { action, payload } = data;
+    const { action, payload, syncKey } = data;
+
+    // 1. Basic Security Checks
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Missing or invalid Authorization header' }, { status: 401 });
+    }
+
+    if (!syncKey || typeof syncKey !== 'string' || syncKey.length < 4) {
+      return NextResponse.json({ error: 'Valid Sync Key is required for data isolation' }, { status: 400 });
+    }
 
     // Access the D1 database binding
     const db = (process.env as any).DB;
@@ -18,14 +28,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 2. Action Handlers with syncKey Isolation
     if (action === 'pull') {
       const { lastSynced = 0 } = payload || {};
       
-      // Fetch only data updated after lastSynced
-      const memories = await db.prepare('SELECT * FROM memories WHERE updatedAt > ? OR createdAt > ?').bind(lastSynced, lastSynced).all();
-      const nodes = await db.prepare('SELECT * FROM knowledge_nodes WHERE updatedAt > ?').bind(lastSynced).all();
-      const textbooks = await db.prepare('SELECT * FROM textbooks WHERE updatedAt > ?').bind(lastSynced).all();
-      const resources = await db.prepare('SELECT * FROM resources WHERE updatedAt > ?').bind(lastSynced).all();
+      // Fetch only data belonging to this syncKey and updated after lastSynced
+      const memories = await db.prepare('SELECT * FROM memories WHERE syncKey = ? AND (updatedAt > ? OR createdAt > ?)')
+        .bind(syncKey, lastSynced, lastSynced).all();
+      
+      const nodes = await db.prepare('SELECT * FROM knowledge_nodes WHERE syncKey = ? AND updatedAt > ?')
+        .bind(syncKey, lastSynced).all();
+      
+      const textbooks = await db.prepare('SELECT * FROM textbooks WHERE syncKey = ? AND updatedAt > ?')
+        .bind(syncKey, lastSynced).all();
+      
+      const resources = await db.prepare('SELECT * FROM resources WHERE syncKey = ? AND updatedAt > ?')
+        .bind(syncKey, lastSynced).all();
       
       return NextResponse.json({
         success: true,
@@ -58,8 +76,8 @@ export async function POST(req: NextRequest) {
 
       const now = Date.now();
       const statements = items.map(m => db.prepare(`
-        INSERT INTO memories (id, subject, content, functionType, purposeType, isMistake, wrongAnswer, errorReason, visualDescription, notes, knowledgeNodeIds, createdAt, updatedAt, embedding)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO memories (id, syncKey, subject, content, functionType, purposeType, isMistake, wrongAnswer, errorReason, visualDescription, notes, knowledgeNodeIds, createdAt, updatedAt, embedding)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           subject = excluded.subject,
           content = excluded.content,
@@ -74,7 +92,7 @@ export async function POST(req: NextRequest) {
           updatedAt = excluded.updatedAt,
           embedding = excluded.embedding
       `).bind(
-        m.id, m.subject, m.content, m.functionType, m.purposeType, m.isMistake ? 1 : 0, 
+        m.id, syncKey, m.subject, m.content, m.functionType, m.purposeType, m.isMistake ? 1 : 0, 
         m.wrongAnswer || null, m.errorReason || null, m.visualDescription || null, m.notes || null,
         JSON.stringify(m.knowledgeNodeIds || []), m.createdAt, now,
         m.embedding ? JSON.stringify(m.embedding) : null
@@ -90,15 +108,15 @@ export async function POST(req: NextRequest) {
 
       const now = Date.now();
       const statements = items.map(n => db.prepare(`
-        INSERT INTO knowledge_nodes (id, subject, name, parentId, "order", updatedAt)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO knowledge_nodes (id, syncKey, subject, name, parentId, "order", updatedAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           subject = excluded.subject,
           name = excluded.name,
           parentId = excluded.parentId,
           "order" = excluded."order",
           updatedAt = excluded.updatedAt
-      `).bind(n.id, n.subject, n.name, n.parentId, n.order || 0, now));
+      `).bind(n.id, syncKey, n.subject, n.name, n.parentId, n.order || 0, now));
 
       await db.batch(statements);
       return NextResponse.json({ success: true, serverTime: now });

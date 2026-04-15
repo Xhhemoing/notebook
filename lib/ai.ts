@@ -54,20 +54,21 @@ export async function getEmbedding(
     if (!textContent) {
       throw new Error('OpenAI embeddings only support text content');
     }
-    const response = await fetch(customModel.baseUrl || 'https://api.openai.com/v1/embeddings', {
+    const response = await fetch('/api/ai/proxy', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${customModel.apiKey}`
       },
       body: JSON.stringify({
+        baseUrl: customModel.baseUrl,
+        apiKey: customModel.apiKey,
         model: customModel.modelId,
         input: textContent
       })
     });
     if (!response.ok) {
       const err = await response.text();
-      throw new Error(`OpenAI Embedding API error: ${err}`);
+      throw new Error(`AI Proxy (Embedding) error: ${err}`);
     }
     const data = await response.json();
     return data.data[0].embedding;

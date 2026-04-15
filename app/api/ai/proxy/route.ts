@@ -4,18 +4,24 @@ export const runtime = 'edge';
 
 export async function POST(req: NextRequest) {
   try {
-    const { baseUrl, apiKey, model, messages, response_format } = await req.json();
+    const { baseUrl, apiKey, ...payload } = await req.json();
 
     if (!apiKey) {
       return NextResponse.json({ error: 'API Key is required' }, { status: 400 });
     }
 
-    let targetUrl = baseUrl || 'https://api.openai.com/v1/chat/completions';
+    // Determine the default path based on the payload content
+    let defaultEndpoint = '/chat/completions';
+    if (payload.input && !payload.messages) {
+      defaultEndpoint = '/embeddings';
+    }
+
+    let targetUrl = baseUrl || `https://api.openai.com/v1${defaultEndpoint}`;
     
-    // Ensure baseUrl is actually a chat completions endpoint for OpenAI-compatible providers
-    if (baseUrl && !baseUrl.includes('/chat/completions')) {
+    // Ensure the path is correctly appended for custom providers
+    if (baseUrl && !baseUrl.includes(defaultEndpoint)) {
       const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-      targetUrl = `${cleanBaseUrl}/chat/completions`;
+      targetUrl = `${cleanBaseUrl}${defaultEndpoint}`;
     }
 
     const response = await fetch(targetUrl, {
@@ -24,11 +30,7 @@ export async function POST(req: NextRequest) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`
       },
-      body: JSON.stringify({
-        model,
-        messages,
-        response_format
-      })
+      body: JSON.stringify(payload)
     });
 
     if (!response.ok) {
