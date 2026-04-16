@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { generateTextWithFallback } from '@/lib/ai/config';
+import { generateObjectWithFallback } from '@/lib/ai/config';
+import { z } from 'zod';
 
 // In a real app, this would be a database like D1, Postgres, or Firestore
 // Using a global variable for simple in-memory task tracking during dev
@@ -34,35 +35,31 @@ export async function POST(req: Request) {
       ? { type: 'image', image: imageUrl } // Vercel AI SDK format for URL
       : { type: 'image', image: base64 }; // Vercel AI SDK format for base64
 
-    // Call Gemini Vision model to analyze the mistake
-    const result = await generateTextWithFallback({
+    // Call Gemini Vision model to analyze the mistake using Structured Outputs
+    const result = await generateObjectWithFallback({
       tier: 'smart',
+      schema: z.object({
+        originalQuestion: z.string().describe("The original question text from the image"),
+        studentAnswer: z.string().describe("The student's incorrect answer"),
+        correctAnswer: z.string().describe("The correct answer to the question"),
+        coreConcept: z.string().describe("The core knowledge concept being tested"),
+        explanation: z.string().describe("Explanation of why the student made the mistake and how to fix it")
+      }),
       messages: [
         {
           role: 'user',
           content: [
-            { type: 'text', text: 'Please analyze this exam mistake image. Extract the original question, the student\'s answer, the correct answer, and explain the core concept and why the student made the mistake. Return the result as a structured JSON object with keys: originalQuestion, studentAnswer, correctAnswer, coreConcept, explanation.' },
+            { type: 'text', text: 'Please analyze this exam mistake image. Extract the original question, the student\'s answer, the correct answer, and explain the core concept and why the student made the mistake.' },
             imageContent as any,
           ]
         }
       ]
     });
 
-    // Parse the JSON result
-    let parsedResult;
-    try {
-      // Simple extraction if the model wraps it in markdown code blocks
-      const jsonStr = result.text.replace(/```json\n?|\n?```/g, '').trim();
-      parsedResult = JSON.parse(jsonStr);
-    } catch (e) {
-      console.warn('Failed to parse JSON, using raw text', e);
-      parsedResult = { rawText: result.text };
-    }
-
     // Save to Database (Mocked here)
     global.taskStatuses.set(taskId, { 
       status: 'completed', 
-      result: parsedResult 
+      result: result.object 
     });
 
     console.log(`[Webhook] Completed task ${taskId}`);

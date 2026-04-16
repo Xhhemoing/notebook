@@ -1,6 +1,7 @@
 import { google } from '@ai-sdk/google';
 import { openai } from '@ai-sdk/openai';
-import { generateText, streamText, embed, CoreMessage } from 'ai';
+import { generateText, streamText, embed, CoreMessage, generateObject } from 'ai';
+import { z } from 'zod';
 
 // 统一对外暴露的获取大模型实例的方法
 export const getLLM = (tier: 'fast' | 'smart' = 'fast') => {
@@ -23,6 +24,48 @@ interface GenerateOptions {
   system?: string;
   maxTokens?: number;
   temperature?: number;
+}
+
+interface GenerateObjectOptions<T> extends GenerateOptions {
+  schema: z.ZodType<T>;
+}
+
+/**
+ * 带重试和回退机制的结构化对象生成 (Structured Outputs)
+ */
+export async function generateObjectWithFallback<T>(options: GenerateObjectOptions<T>) {
+  const tier = options.tier || 'fast';
+  
+  try {
+    console.log(`[AI Gateway] Attempting generateObject with Google model (tier: ${tier})`);
+    const result = await generateObject({
+      model: getLLM(tier),
+      schema: options.schema,
+      prompt: options.prompt,
+      messages: options.messages,
+      system: options.system,
+      temperature: options.temperature,
+    });
+    return result;
+  } catch (error) {
+    console.error("[AI Gateway] Google API failed for generateObject. Error:", error);
+    console.log(`[AI Gateway] Falling back to OpenAI model for generateObject (tier: ${tier})`);
+    
+    try {
+      const fallbackResult = await generateObject({
+        model: getFallbackLLM(tier),
+        schema: options.schema,
+        prompt: options.prompt,
+        messages: options.messages,
+        system: options.system,
+        temperature: options.temperature,
+      });
+      return fallbackResult;
+    } catch (fallbackError) {
+      console.error("[AI Gateway] Fallback OpenAI API also failed for generateObject. Error:", fallbackError);
+      throw new Error("All LLM providers failed to generate object.");
+    }
+  }
 }
 
 /**
