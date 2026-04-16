@@ -10,17 +10,11 @@
     "clean": "next clean"
   },
   "dependencies": {
-    "@ai-sdk/google": "^3.0.63",
-    "@ai-sdk/openai": "^3.0.53",
     "@google/genai": "^1.17.0",
     "@hookform/resolvers": "^5.2.1",
     "@tanstack/react-virtual": "^3.13.23",
-    "@upstash/qstash": "^2.10.1",
-    "@upstash/vector": "^1.2.3",
     "@xyflow/react": "^12.10.2",
-    "ai": "^6.0.162",
     "autoprefixer": "^10.4.21",
-    "browser-image-compression": "^2.0.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "d3": "^7.9.0",
@@ -39,7 +33,6 @@
     "recharts": "^3.8.1",
     "rehype-katex": "^7.0.1",
     "remark-math": "^6.0.0",
-    "swr": "^2.4.1",
     "tailwind-merge": "^3.3.1",
     "ts-fsrs": "^5.3.1",
     "uuid": "^13.0.0"

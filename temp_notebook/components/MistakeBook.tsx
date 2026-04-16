@@ -1,14 +1,13 @@
 'use client';
 
 import { useAppContext } from '@/lib/store';
-import { BookX, Trash2, CheckCircle, Info, Edit, Search, Filter, X, ChevronLeft, ChevronRight, Zap } from 'lucide-react';
+import { BookX, Trash2, CheckCircle, Info, Edit, Search, Filter, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 import { clsx } from 'clsx';
 import { ImageModal } from './ImageModal';
 import Markdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import MistakeUploader from './MistakeUploader';
 
 export function MistakeBook() {
   const { state, dispatch } = useAppContext();
@@ -21,9 +20,6 @@ export function MistakeBook() {
   const [editWrongAnswer, setEditWrongAnswer] = useState('');
   const [editErrorReason, setEditErrorReason] = useState('');
   const [filterReason, setFilterReason] = useState<string>('all');
-  const [showUploader, setShowUploader] = useState(false);
-  const [examPrepData, setExamPrepData] = useState<string>('');
-  const [isGeneratingPrep, setIsGeneratingPrep] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 12;
@@ -67,41 +63,6 @@ export function MistakeBook() {
     }
   };
 
-  const handleGenerateExamPrep = async () => {
-    setIsGeneratingPrep(true);
-    setExamPrepData('');
-    try {
-      const response = await fetch('/api/exam-prep', { method: 'POST' });
-      if (!response.body) throw new Error('No response body');
-      
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        // Clean up Vercel AI SDK stream format if needed (usually starts with 0:"text")
-        const lines = chunk.split('\n');
-        for (const line of lines) {
-          if (line.startsWith('0:')) {
-            try {
-              const text = JSON.parse(line.substring(2));
-              setExamPrepData(prev => prev + text);
-            } catch (e) {
-              // Ignore parse errors for incomplete chunks
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Error generating exam prep:', error);
-      setExamPrepData('生成失败，请重试。');
-    } finally {
-      setIsGeneratingPrep(false);
-    }
-  };
-
   return (
     <div className="p-6 h-full flex flex-col max-w-6xl mx-auto text-slate-200 bg-black min-h-screen">
       {/* Header Section */}
@@ -116,22 +77,7 @@ export function MistakeBook() {
           <p className="text-slate-500 text-sm mt-1">记录薄弱环节，针对性查漏补缺</p>
         </div>
         
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={() => setShowUploader(!showUploader)}
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-medium transition-colors"
-          >
-            {showUploader ? '隐藏上传' : '上传错题'}
-          </button>
-          <button
-            onClick={handleGenerateExamPrep}
-            disabled={isGeneratingPrep}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50"
-          >
-            <Zap className="w-4 h-4" />
-            {isGeneratingPrep ? '生成中...' : '考前突击包'}
-          </button>
-          
+        <div className="flex items-center gap-3">
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-red-500 transition-colors" />
             <input
@@ -158,29 +104,6 @@ export function MistakeBook() {
           </div>
         </div>
       </div>
-
-      {showUploader && (
-        <div className="mb-8">
-          <MistakeUploader />
-        </div>
-      )}
-
-      {examPrepData && (
-        <div className="mb-8 p-6 bg-indigo-900/20 border border-indigo-500/30 rounded-2xl">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-bold text-indigo-300 flex items-center gap-2">
-              <Zap className="w-5 h-5 text-indigo-400" />
-              考前突击包 (AI 生成)
-            </h3>
-            <button onClick={() => setExamPrepData('')} className="text-slate-500 hover:text-slate-300">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          <div className="prose prose-invert prose-sm max-w-none text-slate-300">
-            <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{examPrepData}</Markdown>
-          </div>
-        </div>
-      )}
 
       {/* Content Grid */}
       <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">

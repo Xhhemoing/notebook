@@ -1,0 +1,8 @@
+#:schema https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json
+name = "ai-studio-applet"
+compatibility_date = "2024-04-03"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Add your environment variables here
+# NEXT_PUBLIC_GEMINI_API_KEY = ""
