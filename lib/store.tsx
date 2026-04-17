@@ -369,6 +369,17 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, resources: state.resources.filter(r => r.id !== action.payload) };
     case 'SET_RESOURCES':
       return { ...state, resources: action.payload };
+    case 'REMOVE_DRAFT_PROPOSAL':
+      return {
+        ...state,
+        memories: state.memories.map(m => {
+          if (m.id === action.payload) {
+             const { draftProposal, ...rest } = m as any;
+             return rest as Memory;
+          }
+          return m;
+        })
+      };
     default:
       return state;
   }

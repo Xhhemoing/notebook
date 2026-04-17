@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useAppContext } from '@/lib/store';
-import { adjustKnowledgeGraph, GraphOperation } from '@/lib/ai';
+import { useAppContext } from '../lib/store';
+import { adjustKnowledgeGraph, GraphOperation } from '../lib/ai';
 import { Loader2, Send, Wand2, X, BrainCircuit, Target, BookOpen, UploadCloud, Check, RotateCcw, AlertCircle, Maximize } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import * as d3 from 'd3';
@@ -10,9 +10,11 @@ import { clsx } from 'clsx';
 import Markdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import { useGlobalAIChat } from '../lib/ai-chat-context';
 
 export function KnowledgeGraph() {
   const { state, dispatch } = useAppContext();
+  const { startGraphAnalysis } = useGlobalAIChat();
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
@@ -26,7 +28,12 @@ export function KnowledgeGraph() {
   const [editNodeName, setEditNodeName] = useState('');
   const [image, setImage] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'graph' | 'outline'>('graph');
-  const [previewResult, setPreviewResult] = useState<{ reasoning: string; operations: GraphOperation[] } | null>(null);
+  
+  // Use global draft state for preview instead of local state
+  const previewResult = state.draftGraphProposal || null;
+  const setPreviewResult = (val: any) => {
+    dispatch({ type: 'UPDATE_DRAFT', payload: { draftGraphProposal: val } });
+  };
   const [isDragging, setIsDragging] = useState(false);
   const [confirmModal, setConfirmModal] = useState<{ isOpen: boolean; title: string; message: string; onConfirm: () => void } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -244,32 +251,18 @@ export function KnowledgeGraph() {
   }, [state.knowledgeNodes, state.memories, state.currentSubject, renderTrigger, selectedNodeId]);
 
   const handleAdjust = async () => {
-    if ((!command.trim() && !image) || loading) return;
-    setLoading(true);
+    if (!command.trim() && !image) return;
 
     try {
-      const subjectNodes = state.knowledgeNodes.filter(n => n.subject === state.currentSubject);
-      const result = await adjustKnowledgeGraph(command, state.currentSubject, subjectNodes, state.settings, image || undefined, (log) => {
-        if (state.settings.enableLogging) {
-          dispatch({
-            type: 'ADD_LOG',
-            payload: {
-              id: Math.random().toString(36).substr(2, 9),
-              timestamp: Date.now(),
-              ...log
-            }
-          });
-        }
-      });
-      
-      setPreviewResult(result);
+      startGraphAnalysis(
+        `指令: ${command}\n当前知识图谱结构: ${JSON.stringify(state.knowledgeNodes.filter(n => n.subject === state.currentSubject))}`, 
+        image ? [image] : undefined
+      );
       setCommand('');
       setImage(null);
     } catch (error) {
       console.error('Failed to adjust graph:', error);
-      alert('调整失败，请检查指令或网络。');
-    } finally {
-      setLoading(false);
+      alert('调整失败，请检查网络。');
     }
   };
 
@@ -556,7 +549,7 @@ export function KnowledgeGraph() {
           )}
           
           {/* AI Adjustment Bar */}
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-full max-w-2xl px-4">
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-full max-w-2xl px-4 z-10">
             {previewResult ? (
               <div className="bg-slate-900/95 backdrop-blur-md border-2 border-purple-900/50 shadow-xl rounded-xl p-4 flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-4 duration-300">
                 <div className="flex items-center justify-between">

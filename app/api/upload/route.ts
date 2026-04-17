@@ -7,9 +7,9 @@ const qstash = new Client({
 
 export async function POST(req: Request) {
   try {
-    const { imageUrl, base64 } = await req.json();
+    const { imageUrl, base64, snippets } = await req.json();
     
-    if (!imageUrl && !base64) {
+    if (!imageUrl && !base64 && (!snippets || snippets.length === 0)) {
       return NextResponse.json({ error: 'Missing image data' }, { status: 400 });
     }
 
@@ -27,6 +27,7 @@ export async function POST(req: Request) {
           taskId,
           imageUrl,
           base64,
+          snippets
         },
         // Add deduplication ID for idempotency
         deduplicationId: taskId,
@@ -37,7 +38,7 @@ export async function POST(req: Request) {
       fetch(`${baseUrl}/api/webhooks/process-image`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId, imageUrl, base64 })
+        body: JSON.stringify({ taskId, imageUrl, base64, snippets })
       }).catch(e => console.error("Local webhook fallback failed", e));
     }
 

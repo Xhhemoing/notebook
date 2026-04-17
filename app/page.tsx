@@ -1,19 +1,21 @@
 'use client';
 
 import { useState } from 'react';
-import { AppProvider, useAppContext } from '@/lib/store';
-import { Sidebar, View } from '@/components/Sidebar';
-import { SubjectSelector } from '@/components/SubjectSelector';
-import { Dashboard } from '@/components/Dashboard';
-import { InputSection } from '@/components/InputSection';
-import { KnowledgeGraph } from '@/components/KnowledgeGraph';
-import { MemoryBank } from '@/components/MemoryBank';
-import { MistakeBook } from '@/components/MistakeBook';
-import { AIChat } from '@/components/AIChat';
-import { Settings } from '@/components/Settings';
-import { ReviewSection } from '@/components/ReviewSection';
-import { TextbookModule } from '@/components/TextbookModule';
-import { ResourceLibrary } from '@/components/ResourceLibrary';
+import { AppProvider, useAppContext } from '../lib/store';
+import { GlobalAIChatProvider } from '../lib/ai-chat-context';
+import { GlobalAIPanel } from '../components/GlobalAIPanel';
+import { Sidebar, View } from '../components/Sidebar';
+import { SubjectSelector } from '../components/SubjectSelector';
+import { Dashboard } from '../components/Dashboard';
+import { InputSection } from '../components/InputSection';
+import { KnowledgeGraph } from '../components/KnowledgeGraph';
+import { MemoryBank } from '../components/MemoryBank';
+import { MistakeBook } from '../components/MistakeBook';
+import { AIChat } from '../components/AIChat';
+import { Settings } from '../components/Settings';
+import { ReviewSection } from '../components/ReviewSection';
+import { TextbookModule } from '../components/TextbookModule';
+import { ResourceLibrary } from '../components/ResourceLibrary';
 import { clsx } from 'clsx';
 import { useEffect } from 'react';
 
@@ -68,7 +70,10 @@ export default function Home() {
 
   return (
     <AppProvider>
-      <MainLayout currentView={currentView} setCurrentView={setCurrentView} />
+      <GlobalAIChatProvider>
+        <MainLayout currentView={currentView} setCurrentView={setCurrentView} />
+        <GlobalAIPanel />
+      </GlobalAIChatProvider>
     </AppProvider>
   );
 }

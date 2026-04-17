@@ -196,6 +196,7 @@ export interface AppState {
   inputHistory: InputHistoryItem[];
   draftInput?: string;
   draftImages?: string[];
+  draftGraphProposal?: { reasoning: string; operations: any[] } | null;
   resources: Resource[];
 }
 
@@ -234,7 +235,7 @@ export type Action =
   | { type: 'DELETE_SUBJECT_NODES'; payload: { subject: Subject } }
   | { type: 'DELETE_SUBJECT_MISTAKES'; payload: { subject: Subject } }
   | { type: 'DELETE_SUBJECT_TEXTBOOKS'; payload: { subject: Subject } }
-  | { type: 'UPDATE_DRAFT'; payload: { draftInput?: string; draftImages?: string[] } }
+  | { type: 'UPDATE_DRAFT'; payload: { draftInput?: string; draftImages?: string[]; draftGraphProposal?: { reasoning: string; operations: any[] } | null; } }
   | { type: 'ADD_RESOURCE'; payload: Resource }
   | { type: 'DELETE_RESOURCE'; payload: string }
   | { type: 'SET_RESOURCES'; payload: Resource[] };

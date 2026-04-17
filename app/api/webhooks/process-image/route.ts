@@ -14,12 +14,9 @@ if (!global.taskStatuses) {
 export async function POST(req: Request) {
   let taskId: string | undefined;
   try {
-    // Verify QStash signature in production!
-    // const signature = req.headers.get('upstash-signature');
-    
     const body = await req.json();
     taskId = body.taskId;
-    const { imageUrl, base64 } = body;
+    const { imageUrl, base64, snippets } = body;
 
     if (!taskId) {
       return NextResponse.json({ error: 'Missing taskId' }, { status: 400 });
@@ -30,28 +27,47 @@ export async function POST(req: Request) {
     // Update status to processing
     global.taskStatuses.set(taskId, { status: 'processing' });
 
-    // Prepare image content for Gemini
-    const imageContent = imageUrl 
-      ? { type: 'image', image: imageUrl } // Vercel AI SDK format for URL
-      : { type: 'image', image: base64 }; // Vercel AI SDK format for base64
+    let systemPrompt = 'Please analyze this exam mistake image. Extract the original question, the student\'s answer, the correct answer, and explain the core concept and why the student made the mistake.';
+    let aiContent: any[] = [];
+
+    if (snippets && snippets.length > 0) {
+      systemPrompt = '你是一个阅卷助手。用户传入了若干张局部截图。请对比带有【题目正文】和【我的错解】标签的图片，提取题干并用一句话指出错解违背了什么概念。并给出一个知识图谱的局部变更提案。';
+      aiContent = [
+        { type: 'text', text: systemPrompt },
+        ...snippets.flatMap((s: any) => [
+          { type: 'text', text: `[图片附件标签: ${s.tag}]` },
+          { type: 'image', image: s.base64 }
+        ])
+      ];
+    } else {
+      const imageContent = imageUrl 
+      ? { type: 'image', image: imageUrl } 
+      : { type: 'image', image: base64 };
+      aiContent = [
+        { type: 'text', text: systemPrompt },
+        imageContent as any
+      ];
+    }
 
     // Call Gemini Vision model to analyze the mistake using Structured Outputs
     const result = await generateObjectWithFallback({
       tier: 'smart',
       schema: z.object({
-        originalQuestion: z.string().describe("The original question text from the image"),
+        originalQuestion: z.string().describe("The original question text from the image (use LaTeX for math)"),
         studentAnswer: z.string().describe("The student's incorrect answer"),
         correctAnswer: z.string().describe("The correct answer to the question"),
         coreConcept: z.string().describe("The core knowledge concept being tested"),
-        explanation: z.string().describe("Explanation of why the student made the mistake and how to fix it")
+        explanation: z.string().describe("Explanation of why the student made the mistake and how to fix it"),
+        graphProposal: z.object({
+          action: z.enum(['LINK_EXISTING', 'CREATE_NODE', 'ADD_RELATION']).describe("LINK_EXISTING: 挂载现有; CREATE_NODE: 新建节点; ADD_RELATION: 添加易混淆关联"),
+          suggestedNodeName: z.string().optional().describe("If creating a node or adding relation, the target node name"),
+          reasoning: z.string().describe("向用户解释为什么要建立这个图谱关联（用启发式的口吻，例如'看起来你在这道题上混淆了...'）")
+        }).describe("局部拓扑图变更预测")
       }),
       messages: [
         {
           role: 'user',
-          content: [
-            { type: 'text', text: 'Please analyze this exam mistake image. Extract the original question, the student\'s answer, the correct answer, and explain the core concept and why the student made the mistake.' },
-            imageContent as any,
-          ]
+          content: aiContent
         }
       ]
     });
