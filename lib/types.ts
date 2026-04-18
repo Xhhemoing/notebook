@@ -18,11 +18,17 @@ export interface FSRSData {
 export interface Memory {
   id: string;
   subject: Subject;
+  version?: number;
+  status?: 'draft' | 'active' | 'archived' | 'deleted';
+  dataSource?: 'manual' | 'ai_parse' | 'ai_chat' | 'mistake_analysis' | 'textbook_extract' | 'import' | 'system';
   region?: string; // e.g., 'Beijing', 'National Paper 1'
   content: string; // Question stem or knowledge point
   correctAnswer?: string; // Standard answer
   questionType?: string; // e.g., 'multiple-choice', 'fill-in-the-blank', 'essay'
   source?: string; // e.g., '2023 Midterm Exam'
+  sourceTextbookId?: string;
+  sourceTextbookPage?: number;
+  sourceResourceIds?: string[];
   functionType: MemoryFunction;
   purposeType: MemoryPurpose;
   knowledgeNodeIds: string[];
@@ -30,6 +36,7 @@ export interface Memory {
   mastery: number; // 0-100, maps to FSRS stability
   createdAt: number;
   updatedAt?: number;
+  deletedAt?: number;
   lastReviewed?: number;
   notes?: string;
   sourceType: 'text' | 'image';
@@ -58,10 +65,14 @@ export interface Memory {
 export interface KnowledgeNode {
   id: string; // Hierarchical ID like "1.2.1"
   subject: Subject;
+  version?: number;
+  status?: 'active' | 'archived' | 'deleted';
+  dataSource?: 'manual' | 'ai_parse' | 'ai_chat' | 'mistake_analysis' | 'textbook_extract' | 'import' | 'system';
   name: string;
   parentId: string | null;
   order: number; // Order within siblings
   updatedAt?: number;
+  deletedAt?: number;
   correlation?: { [targetId: string]: number }; // Correlation score 0-1 with other nodes
   testingMethods?: string[]; // 考法
 }
@@ -133,12 +144,17 @@ export interface Textbook {
   id: string;
   name: string;
   subject: Subject;
+  version?: number;
+  status?: 'active' | 'archived' | 'deleted';
+  dataSource?: 'manual' | 'ai_parse' | 'ai_chat' | 'mistake_analysis' | 'textbook_extract' | 'import' | 'system';
   fileId?: string; // IDB key for the raw file
   fileType?: string; // e.g., 'application/pdf'
   totalPages?: number;
   pages: TextbookPage[]; // Cached pages or pre-rendered pages
   framework?: KnowledgeNode[]; // AI generated framework
   createdAt: number;
+  updatedAt?: number;
+  deletedAt?: number;
 }
 
 export interface ReviewPlanItem {
@@ -175,9 +191,14 @@ export interface InputHistoryItem {
 export interface Resource {
   id: string;
   name: string;
+  version?: number;
+  status?: 'active' | 'archived' | 'deleted';
+  dataSource?: 'manual' | 'ai_parse' | 'ai_chat' | 'mistake_analysis' | 'textbook_extract' | 'import' | 'system';
   type: string; // 'folder', 'pdf', 'image', 'doc', 'other'
   size: number;
   createdAt: number;
+  updatedAt?: number;
+  deletedAt?: number;
   data?: string; // base64 for local, URL for remote
   subject: Subject;
   tags?: string[];
@@ -185,10 +206,27 @@ export interface Resource {
   isFolder?: boolean;
 }
 
+export type LinkEntityType = 'memory' | 'node' | 'textbook' | 'resource';
+
+export interface Link {
+  id: string;
+  fromType: LinkEntityType;
+  fromId: string;
+  toType: LinkEntityType;
+  toId: string;
+  relationType: 'memory_node' | 'memory_textbook' | 'memory_resource' | 'node_parent';
+  score?: number; // 0-1 confidence
+  isDerived?: boolean; // true means auto-generated from system rules
+  source?: 'system' | 'manual' | 'ai';
+  createdAt: number;
+  updatedAt?: number;
+}
+
 export interface AppState {
   currentSubject: Subject;
   memories: Memory[];
   knowledgeNodes: KnowledgeNode[];
+  links: Link[];
   textbooks: Textbook[];
   reviewPlans: ReviewPlan[];
   settings: Settings;
@@ -241,4 +279,7 @@ export type Action =
   | { type: 'ADD_RESOURCE'; payload: Resource }
   | { type: 'DELETE_RESOURCE'; payload: string }
   | { type: 'SET_RESOURCES'; payload: Resource[] }
+  | { type: 'ADD_LINK'; payload: Link }
+  | { type: 'BATCH_ADD_LINKS'; payload: Link[] }
+  | { type: 'DELETE_LINK'; payload: string }
   | { type: 'REMOVE_DRAFT_PROPOSAL'; payload: string };

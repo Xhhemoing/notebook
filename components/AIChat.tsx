@@ -10,6 +10,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { v4 as uuidv4 } from 'uuid';
 import { ModelSelector } from '@/components/ModelSelector';
+import { createMemoryPayload } from '@/lib/data/commands';
 
 import { TextbookPagePreview } from './TextbookPagePreview';
 
@@ -43,6 +44,7 @@ export function AIChat() {
   const [ragStatus, setRagStatus] = useState<string | null>(null);
   const [selectedMemoryIds, setSelectedMemoryIds] = useState<string[]>([]);
   const [image, setImage] = useState<string | null>(null);
+  const [imageResourceId, setImageResourceId] = useState<string | null>(null);
   const [showMemorySelector, setShowMemorySelector] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [enableRAG, setEnableRAG] = useState(true);
@@ -92,10 +94,12 @@ export function AIChat() {
     setMessages(prev => [...prev, userMsg]);
     const currentInput = input;
     const currentImage = image;
+    const currentImageResourceId = imageResourceId;
     const currentSelectedMemories = selectedMemoryIds;
     
     setInput('');
     setImage(null);
+    setImageResourceId(null);
     setSelectedMemoryIds([]);
     setLoading(true);
 
@@ -149,7 +153,14 @@ export function AIChat() {
       extractMemoryFromChat(currentInput, response, state.currentSubject, state.settings)
         .then(memory => {
           if (memory) {
-            dispatch({ type: 'ADD_MEMORY', payload: memory });
+            const memoryResult = createMemoryPayload({
+              ...memory,
+              dataSource: 'ai_chat',
+              sourceResourceIds: currentImageResourceId ? [currentImageResourceId] : undefined,
+            });
+            if (memoryResult.ok) {
+              dispatch({ type: 'ADD_MEMORY', payload: memoryResult.value });
+            }
             // Optional: notify user or just silently add
           }
         })
@@ -171,12 +182,14 @@ export function AIChat() {
       reader.onloadend = () => {
         const base64 = reader.result as string;
         setImage(base64);
+        const resourceId = uuidv4();
+        setImageResourceId(resourceId);
         
         // Auto-archive to Resource Library
         dispatch({
           type: 'ADD_RESOURCE',
           payload: {
-            id: uuidv4(),
+            id: resourceId,
             name: file.name,
             type: file.type || 'unknown',
             size: file.size,
@@ -210,12 +223,14 @@ export function AIChat() {
       reader.onloadend = () => {
         const base64 = reader.result as string;
         setImage(base64);
+        const resourceId = uuidv4();
+        setImageResourceId(resourceId);
         
         // Auto-archive to Resource Library
         dispatch({
           type: 'ADD_RESOURCE',
           payload: {
-            id: uuidv4(),
+            id: resourceId,
             name: file.name,
             type: file.type || 'unknown',
             size: file.size,
@@ -361,7 +376,10 @@ export function AIChat() {
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={image} alt="Upload preview" className="w-full h-full object-cover" />
                   <button
-                    onClick={() => setImage(null)}
+                    onClick={() => {
+                      setImage(null);
+                      setImageResourceId(null);
+                    }}
                     className="absolute top-1 right-1 bg-black/60 text-white p-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
                   >
                     <X className="w-2 h-2" />

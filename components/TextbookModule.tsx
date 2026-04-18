@@ -24,6 +24,7 @@ import { clsx } from 'clsx';
 import { v4 as uuidv4 } from 'uuid';
 import { processTextbookPage, processTextbookPDF, generateTextbookFramework, getEmbedding } from '@/lib/ai';
 import { parsePDF, parseDocx } from '@/lib/file-parsers';
+import { createMemoryPayload } from '@/lib/data/commands';
 
 import { loadPdfJs } from '@/lib/file-parsers';
 
@@ -173,7 +174,7 @@ export function TextbookModule() {
         state.settings
       );
 
-      const newMemory = {
+      const memoryResult = createMemoryPayload({
         id: uuidv4(),
         subject: activeTextbook.subject,
         content: content || '图片摘抄',
@@ -186,9 +187,17 @@ export function TextbookModule() {
         sourceType: 'image' as const,
         imageUrl: base64Image,
         source: `摘自《${activeTextbook.name}》第 ${currentPage?.pageNumber} 页`,
-        embedding
-      };
-      dispatch({ type: 'ADD_MEMORY', payload: newMemory });
+        sourceTextbookId: activeTextbook.id,
+        sourceTextbookPage: currentPage?.pageNumber,
+        embedding,
+        dataSource: 'textbook_extract'
+      });
+
+      if (!memoryResult.ok) {
+        throw new Error(memoryResult.error);
+      }
+
+      dispatch({ type: 'ADD_MEMORY', payload: memoryResult.value });
       setSelectionBox(null);
       alert('已成功摘抄图片至记忆库！');
     } catch (error) {
@@ -378,7 +387,7 @@ export function TextbookModule() {
     setIsCreatingMemory(true);
     try {
       const embedding = await getEmbedding(selectedText);
-      const newMemory = {
+      const memoryResult = createMemoryPayload({
         id: uuidv4(),
         subject: activeTextbook.subject,
         content: selectedText,
@@ -390,9 +399,17 @@ export function TextbookModule() {
         createdAt: Date.now(),
         sourceType: 'text' as const,
         source: `摘自《${activeTextbook.name}》第 ${currentPage?.pageNumber} 页`,
-        embedding
-      };
-      dispatch({ type: 'ADD_MEMORY', payload: newMemory });
+        sourceTextbookId: activeTextbook.id,
+        sourceTextbookPage: currentPage?.pageNumber,
+        embedding,
+        dataSource: 'textbook_extract'
+      });
+
+      if (!memoryResult.ok) {
+        throw new Error(memoryResult.error);
+      }
+
+      dispatch({ type: 'ADD_MEMORY', payload: memoryResult.value });
       setSelectedText('');
       alert('已成功摘抄至记忆库！');
     } catch (error) {

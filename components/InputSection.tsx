@@ -14,11 +14,13 @@ import { InputHistoryItem } from '@/lib/types';
 import { ModelSelector } from '@/components/ModelSelector';
 
 import { saveImage } from '@/lib/db';
+import { createMemoryPayload } from '@/lib/data/commands';
 
 export function InputSection() {
   const { state, dispatch } = useAppContext();
   const [input, setInput] = useState(state.draftInput || '');
   const [images, setImages] = useState<string[]>(state.draftImages || []);
+  const [draftResourceIds, setDraftResourceIds] = useState<string[]>([]);
   const [isScanMode, setIsScanMode] = useState(false);
   const [isFullExamMode, setIsFullExamMode] = useState(false);
 
@@ -128,6 +130,7 @@ export function InputSection() {
 
     if (files.length > 0) {
       const newImages: string[] = [];
+      const newResourceIds: string[] = [];
       for (const file of files) {
         if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.name.endsWith('.docx')) {
           // Process Word document using mammoth
@@ -149,10 +152,11 @@ export function InputSection() {
         });
         
         // Auto-archive to Resource Library
+        const resourceId = uuidv4();
         dispatch({
           type: 'ADD_RESOURCE',
           payload: {
-            id: uuidv4(),
+            id: resourceId,
             name: file.name,
             type: file.type || 'unknown',
             size: file.size,
@@ -163,6 +167,7 @@ export function InputSection() {
             parentId: null
           }
         });
+        newResourceIds.push(resourceId);
 
         if (isScanMode && file.type.startsWith('image/')) {
           const scanned = await processImageToScan(base64);
@@ -173,6 +178,9 @@ export function InputSection() {
       }
       if (newImages.length > 0) {
         setImages(prev => [...prev, ...newImages]);
+      }
+      if (newResourceIds.length > 0) {
+        setDraftResourceIds(prev => [...prev, ...newResourceIds]);
       }
     }
   }, [isScanMode, dispatch, state.currentSubject]);
@@ -360,7 +368,7 @@ export function InputSection() {
           }
         }
 
-        return {
+        const memoryResult = createMemoryPayload({
           id: memoryId,
           subject: pendingReview.identifiedSubject,
           content: item.content,
@@ -377,14 +385,22 @@ export function InputSection() {
           sourceType: images.length > 0 ? 'image' : 'text' as any,
           imageUrl: images[0] || undefined, // Primary image
           imageUrls: images.length > 0 ? images.map((_, idx) => `${memoryId}_${idx}`) : undefined,
+          sourceResourceIds: draftResourceIds,
           isMistake: item.isMistake || isMistake,
           wrongAnswer: item.wrongAnswer,
           errorReason: item.errorReason,
           visualDescription: item.visualDescription,
           analysisProcess: pendingReview.aiAnalysis,
           fsrs: getInitialFSRSData(),
-          mastery: 0.01
-        };
+          mastery: 0.01,
+          dataSource: 'ai_parse'
+        });
+
+        if (!memoryResult.ok) {
+          throw new Error(memoryResult.error);
+        }
+
+        return memoryResult.value;
       }));
       dispatch({ type: 'BATCH_ADD_MEMORIES', payload: memories });
     }
@@ -392,6 +408,7 @@ export function InputSection() {
     setSuccess(true);
     setInput('');
     setImages([]);
+    setDraftResourceIds([]);
     dispatch({ type: 'UPDATE_DRAFT', payload: { draftInput: '', draftImages: [] } });
     setIsMistake(false);
     setSupplementaryInstruction('');
@@ -424,7 +441,7 @@ export function InputSection() {
       }
     }
 
-    const memory = {
+    const memoryResult = createMemoryPayload({
       id: memoryId,
       subject: pendingReview.identifiedSubject,
       content: item.content,
@@ -441,22 +458,30 @@ export function InputSection() {
       sourceType: images.length > 0 ? 'image' : 'text' as any,
       imageUrl: images[0] || undefined,
       imageUrls: images.length > 0 ? images.map((_, idx) => `${memoryId}_${idx}`) : undefined,
+      sourceResourceIds: draftResourceIds,
       isMistake: item.isMistake || isMistake,
       wrongAnswer: item.wrongAnswer,
       errorReason: item.errorReason,
       visualDescription: item.visualDescription,
       analysisProcess: pendingReview.aiAnalysis,
       fsrs: getInitialFSRSData(),
-      mastery: 0.01
-    };
+      mastery: 0.01,
+      dataSource: 'ai_parse'
+    });
 
-    dispatch({ type: 'ADD_MEMORY', payload: memory });
+    if (!memoryResult.ok) {
+      alert(`保存失败: ${memoryResult.error}`);
+      return;
+    }
+
+    dispatch({ type: 'ADD_MEMORY', payload: memoryResult.value });
     
     // Remove from pending
     const newItems = pendingReview.parsedItems.filter((_, i) => i !== index);
     if (newItems.length === 0) {
       setPendingReview(null);
       setImages([]);
+      setDraftResourceIds([]);
       setInput('');
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
@@ -470,6 +495,7 @@ export function InputSection() {
     setSupplementaryInstruction('');
     setInput('');
     setImages([]);
+    setDraftResourceIds([]);
   };
 
   if (loading) {

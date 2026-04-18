@@ -10,6 +10,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import MistakeUploader from './MistakeUploader';
 import { v4 as uuidv4 } from 'uuid';
+import { createMemoryPayload } from '@/lib/data/commands';
 
 export function MistakeBook() {
   const { state, dispatch } = useAppContext();
@@ -103,9 +104,8 @@ export function MistakeBook() {
   const handleTaskComplete = (result: any) => {
     if (!result) return;
     
-    const newMemoryId = uuidv4();
-    const newMemory = {
-      id: newMemoryId,
+    const memoryResult = createMemoryPayload({
+      id: uuidv4(),
       subject: state.currentSubject,
       content: result.originalQuestion || '未知题目',
       wrongAnswer: result.studentAnswer || '',
@@ -118,10 +118,20 @@ export function MistakeBook() {
       mastery: 0,
       createdAt: Date.now(),
       sourceType: 'text' as 'text',
-      draftProposal: result.graphProposal // Inject AI generated graph proposal as a draft property
-    };
+      dataSource: 'mistake_analysis'
+    });
 
-    dispatch({ type: 'ADD_MEMORY', payload: newMemory });
+    if (!memoryResult.ok) {
+      alert(`错题入库失败: ${memoryResult.error}`);
+      return;
+    }
+
+    const payload: any = memoryResult.value;
+    if (result.graphProposal) {
+      payload.draftProposal = result.graphProposal;
+    }
+
+    dispatch({ type: 'ADD_MEMORY', payload });
   };
   
   const handleApproveProposal = (memoryId: string, proposal: any) => {

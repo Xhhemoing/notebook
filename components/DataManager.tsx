@@ -4,11 +4,12 @@ import { useAppContext } from '@/lib/store';
 import { Database, Trash2, Edit, Search, FileText, BrainCircuit, Network, HardDrive, CheckSquare, Square, Filter, AlertTriangle, Zap, RefreshCw, Layers, ShieldAlert, Sparkles } from 'lucide-react';
 import { useState, useMemo } from 'react';
 import { clsx } from 'clsx';
-import { Memory, KnowledgeNode, Textbook, Subject } from '@/lib/types';
+import { Memory, KnowledgeNode, Textbook, Subject, Link } from '@/lib/types';
+import { calculateMetrics } from '@/lib/fsrs';
 
 export function DataManager() {
   const { state, dispatch } = useAppContext();
-  const [activeTab, setActiveTab] = useState<'memories' | 'mistakes' | 'rag' | 'textbooks' | 'resources' | 'logs'>('memories');
+  const [activeTab, setActiveTab] = useState<'memories' | 'mistakes' | 'rag' | 'links' | 'textbooks' | 'resources' | 'logs'>('memories');
   const [searchQuery, setSearchQuery] = useState('');
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [logTypeFilter, setLogTypeFilter] = useState<string>('all');
@@ -53,6 +54,8 @@ export function DataManager() {
         dispatch({ type: 'BATCH_DELETE_MEMORIES', payload: ids });
       } else if (activeTab === 'rag') {
         dispatch({ type: 'BATCH_DELETE_NODES', payload: ids });
+      } else if (activeTab === 'links') {
+        ids.forEach(id => dispatch({ type: 'DELETE_LINK', payload: id }));
       } else if (activeTab === 'textbooks') {
         dispatch({ type: 'BATCH_DELETE_TEXTBOOKS', payload: ids });
       } else if (activeTab === 'resources') {
@@ -74,6 +77,7 @@ export function DataManager() {
       if (activeTab === 'memories') dataToExport = state.memories.filter(m => !m.isMistake && selectedIds.has(m.id));
       else if (activeTab === 'mistakes') dataToExport = state.memories.filter(m => m.isMistake && selectedIds.has(m.id));
       else if (activeTab === 'rag') dataToExport = state.knowledgeNodes.filter(n => selectedIds.has(n.id));
+      else if (activeTab === 'links') dataToExport = (state.links || []).filter(l => selectedIds.has(l.id));
       else if (activeTab === 'textbooks') dataToExport = state.textbooks.filter(t => selectedIds.has(t.id));
       else if (activeTab === 'resources') dataToExport = (state.resources || []).filter(r => selectedIds.has(r.id));
       else if (activeTab === 'logs') dataToExport = state.logs.filter(l => selectedIds.has(l.id));
@@ -83,6 +87,7 @@ export function DataManager() {
       if (activeTab === 'memories') dataToExport = state.memories.filter(m => !m.isMistake);
       else if (activeTab === 'mistakes') dataToExport = state.memories.filter(m => m.isMistake);
       else if (activeTab === 'rag') dataToExport = state.knowledgeNodes;
+      else if (activeTab === 'links') dataToExport = state.links || [];
       else if (activeTab === 'textbooks') dataToExport = state.textbooks;
       else if (activeTab === 'resources') dataToExport = state.resources || [];
       else if (activeTab === 'logs') dataToExport = state.logs;
@@ -189,6 +194,36 @@ export function DataManager() {
     );
   }, [state.knowledgeNodes, subjectFilter, searchQuery]);
 
+  const filteredLinks = useMemo(() => {
+    const memoryById = new Map(state.memories.map(memory => [memory.id, memory]));
+    const nodeById = new Map(state.knowledgeNodes.map(node => [node.id, node]));
+    const textbookById = new Map(state.textbooks.map(textbook => [textbook.id, textbook]));
+    const resourceById = new Map((state.resources || []).map(resource => [resource.id, resource]));
+
+    const getEntitySubject = (type: Link['fromType'], id: string) => {
+      if (type === 'memory') return memoryById.get(id)?.subject;
+      if (type === 'node') return nodeById.get(id)?.subject;
+      if (type === 'textbook') return textbookById.get(id)?.subject;
+      if (type === 'resource') return resourceById.get(id)?.subject;
+      return undefined;
+    };
+
+    return (state.links || []).filter(link => {
+      const subject = getEntitySubject(link.fromType, link.fromId) || getEntitySubject(link.toType, link.toId);
+      if (subjectFilter !== 'all' && subject !== subjectFilter) return false;
+      const keyword = `${link.relationType} ${link.fromType} ${link.fromId} ${link.toType} ${link.toId}`.toLowerCase();
+      return keyword.includes(searchQuery.toLowerCase());
+    });
+  }, [
+    state.links,
+    state.memories,
+    state.knowledgeNodes,
+    state.textbooks,
+    state.resources,
+    subjectFilter,
+    searchQuery
+  ]);
+
   const filteredTextbooks = useMemo(() => {
     return state.textbooks.filter(t => 
       (subjectFilter === 'all' || t.subject === subjectFilter) && 
@@ -216,6 +251,95 @@ export function DataManager() {
     ...state.textbooks.map(t => t.subject),
     ...(state.resources || []).map(r => r.subject)
   ]));
+
+  const learningGapInsights = useMemo(() => {
+    const now = Date.now();
+    const subjectNodes = state.knowledgeNodes.filter(n => n.subject === state.currentSubject);
+    const subjectMemories = state.memories.filter(m => m.subject === state.currentSubject);
+    const links = state.links || [];
+
+    const rankedGaps = subjectNodes.map(node => {
+      const linkedMemoryIds = new Set(
+        links
+          .filter(link =>
+            link.relationType === 'memory_node' &&
+            link.toType === 'node' &&
+            link.toId === node.id &&
+            link.fromType === 'memory'
+          )
+          .map(link => link.fromId)
+      );
+      const relatedMemories = subjectMemories.filter(memory => linkedMemoryIds.has(memory.id));
+      const mistakeCount = relatedMemories.filter(m => m.isMistake).length;
+      const overdueCount = relatedMemories.filter(m => (m.fsrs?.due || 0) < now).length;
+      const avgConfidence = relatedMemories.length > 0
+        ? relatedMemories.reduce((sum, memory) => {
+            const metrics = calculateMetrics(memory.fsrs, memory.lastReviewed);
+            return sum + metrics.confidence;
+          }, 0) / relatedMemories.length
+        : 0;
+      const weakCount = relatedMemories.filter(memory => {
+        const metrics = calculateMetrics(memory.fsrs, memory.lastReviewed);
+        return metrics.confidence < 45;
+      }).length;
+      const textbookEvidenceCount = links.filter(link =>
+        link.relationType === 'memory_textbook' &&
+        link.fromType === 'memory' &&
+        linkedMemoryIds.has(link.fromId)
+      ).length;
+      const resourceEvidenceCount = links.filter(link =>
+        link.relationType === 'memory_resource' &&
+        link.fromType === 'memory' &&
+        linkedMemoryIds.has(link.fromId)
+      ).length;
+      const gapScore = (100 - avgConfidence) * 0.5 + mistakeCount * 12 + overdueCount * 8 + (relatedMemories.length === 0 ? 20 : 0);
+
+      return {
+        nodeId: node.id,
+        nodeName: node.name,
+        gapScore,
+        avgConfidence: Math.round(avgConfidence),
+        weakCount,
+        mistakeCount,
+        overdueCount,
+        coverage: relatedMemories.length,
+        textbookEvidenceCount,
+        resourceEvidenceCount,
+      };
+    }).sort((a, b) => b.gapScore - a.gapScore);
+
+    const blindSpots = rankedGaps.filter(item => item.coverage === 0).slice(0, 3);
+    return {
+      topGaps: rankedGaps.slice(0, 3),
+      blindSpots,
+    };
+  }, [state.currentSubject, state.knowledgeNodes, state.memories, state.links]);
+
+  const resourceOrganizationInsights = useMemo(() => {
+    const resources = (state.resources || []).filter(r => r.subject === state.currentSubject);
+    const files = resources.filter(r => !r.isFolder);
+    const unfiled = files.filter(r => !r.parentId);
+    const duplicateNames = new Map<string, number>();
+    files.forEach(file => {
+      const key = file.name.trim().toLowerCase();
+      if (!key) return;
+      duplicateNames.set(key, (duplicateNames.get(key) || 0) + 1);
+    });
+    const duplicateCount = Array.from(duplicateNames.values()).filter(count => count > 1).length;
+    const typeSummary = files.reduce<Record<string, number>>((acc, file) => {
+      const key = file.type || 'other';
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    const topTypes = Object.entries(typeSummary).sort((a, b) => b[1] - a[1]).slice(0, 3);
+
+    return {
+      totalFiles: files.length,
+      unfiledCount: unfiled.length,
+      duplicateCount,
+      topTypes,
+    };
+  }, [state.currentSubject, state.resources]);
 
   const handleSaveMemoryEdit = (id: string) => {
     const memory = state.memories.find(m => m.id === id);
@@ -312,6 +436,65 @@ export function DataManager() {
         </div>
       </div>
 
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-white uppercase tracking-widest">学习漏洞雷达</h3>
+            <span className="text-[10px] text-slate-500 uppercase tracking-wider">{state.currentSubject}</span>
+          </div>
+          {learningGapInsights.topGaps.length === 0 ? (
+            <p className="text-xs text-slate-500">当前学科暂无可分析的知识节点。</p>
+          ) : (
+            <div className="space-y-2">
+              {learningGapInsights.topGaps.map(gap => (
+                <div key={gap.nodeId} className="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-slate-200 font-medium truncate pr-2">{gap.nodeName}</span>
+                    <span className="text-[10px] text-rose-400 font-bold uppercase tracking-wider">Score {Math.round(gap.gapScore)}</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    置信度 {gap.avgConfidence}% · 错题 {gap.mistakeCount} · 待复习 {gap.overdueCount} · 低置信 {gap.weakCount} · 课本证据 {gap.textbookEvidenceCount} · 资源证据 {gap.resourceEvidenceCount}
+                  </p>
+                </div>
+              ))}
+              {learningGapInsights.blindSpots.length > 0 && (
+                <p className="text-[11px] text-amber-400">
+                  尚未覆盖节点：{learningGapInsights.blindSpots.map(item => item.nodeName).join('、')}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-white uppercase tracking-widest">资源归档建议</h3>
+            <span className="text-[10px] text-slate-500 uppercase tracking-wider">{resourceOrganizationInsights.totalFiles} files</span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+              <p className="text-[10px] text-slate-500 uppercase">未归档</p>
+              <p className="text-lg font-black text-amber-400">{resourceOrganizationInsights.unfiledCount}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+              <p className="text-[10px] text-slate-500 uppercase">重名组</p>
+              <p className="text-lg font-black text-rose-400">{resourceOrganizationInsights.duplicateCount}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+              <p className="text-[10px] text-slate-500 uppercase">总文件</p>
+              <p className="text-lg font-black text-indigo-400">{resourceOrganizationInsights.totalFiles}</p>
+            </div>
+          </div>
+          {resourceOrganizationInsights.topTypes.length > 0 ? (
+            <p className="text-[11px] text-slate-400">
+              主要类型：{resourceOrganizationInsights.topTypes.map(([type, count]) => `${type}(${count})`).join(' · ')}
+            </p>
+          ) : (
+            <p className="text-[11px] text-slate-500">当前学科还没有资源文件。</p>
+          )}
+        </div>
+      </div>
+
         <div className="flex gap-4 border-b border-slate-800 pb-4 overflow-x-auto custom-scrollbar">
           <button
             onClick={() => { setActiveTab('memories'); setSelectedIds(new Set()); }}
@@ -342,6 +525,16 @@ export function DataManager() {
           >
             <Network className="w-4 h-4" />
             知识图谱 ({filteredNodes.length})
+          </button>
+          <button
+            onClick={() => { setActiveTab('links'); setSelectedIds(new Set()); }}
+            className={clsx(
+              "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold uppercase tracking-widest transition-colors shrink-0",
+              activeTab === 'links' ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:bg-slate-800"
+            )}
+          >
+            <HardDrive className="w-4 h-4" />
+            关联 ({filteredLinks.length})
           </button>
           <button
             onClick={() => { setActiveTab('textbooks'); setSelectedIds(new Set()); }}
@@ -696,6 +889,67 @@ export function DataManager() {
             ))}
             {filteredNodes.length === 0 && (
               <div className="p-8 text-center text-slate-500 text-sm">暂无匹配的知识节点</div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'links' && (
+          <div className="divide-y divide-slate-800 max-h-[60vh] overflow-y-auto custom-scrollbar">
+            <div className="p-3 bg-slate-900/80 border-b border-slate-800 flex items-center gap-3 sticky top-0 z-10">
+              <button
+                onClick={() => {
+                  if (selectedIds.size === filteredLinks.length) {
+                    setSelectedIds(new Set());
+                  } else {
+                    setSelectedIds(new Set(filteredLinks.map(link => link.id)));
+                  }
+                }}
+                className="text-slate-500 hover:text-white transition-colors"
+              >
+                {selectedIds.size === filteredLinks.length && filteredLinks.length > 0 ? <CheckSquare className="w-5 h-5 text-indigo-500" /> : <Square className="w-5 h-5" />}
+              </button>
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">全选 / 已选 {selectedIds.size} 项</span>
+            </div>
+            {filteredLinks.map(link => (
+              <div key={link.id} className={clsx("p-4 hover:bg-slate-800/50 transition-colors flex gap-4", selectedIds.has(link.id) && "bg-indigo-500/5")}>
+                <button
+                  onClick={() => toggleSelect(link.id)}
+                  className="mt-1 text-slate-700 hover:text-indigo-500 transition-colors shrink-0"
+                >
+                  {selectedIds.has(link.id) ? <CheckSquare className="w-5 h-5 text-indigo-500" /> : <Square className="w-5 h-5" />}
+                </button>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="px-2 py-0.5 bg-indigo-500/10 text-indigo-400 rounded text-[10px] font-bold uppercase tracking-widest">
+                          {link.relationType}
+                        </span>
+                        <span className={clsx(
+                          "px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest",
+                          link.isDerived ? "bg-slate-800 text-slate-400" : "bg-emerald-500/10 text-emerald-400"
+                        )}>
+                          {link.isDerived ? 'derived' : 'manual'}
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-200 break-all">
+                        {link.fromType}:{link.fromId} → {link.toType}:{link.toId}
+                      </p>
+                    </div>
+                    {!link.isDerived && (
+                      <button
+                        onClick={() => dispatch({ type: 'DELETE_LINK', payload: link.id })}
+                        className="p-2 text-slate-500 hover:text-red-400 transition-colors rounded-lg hover:bg-red-400/10"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {filteredLinks.length === 0 && (
+              <div className="p-8 text-center text-slate-500 text-sm">暂无匹配的关联数据</div>
             )}
           </div>
         )}

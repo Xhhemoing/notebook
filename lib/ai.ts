@@ -1576,6 +1576,10 @@ AI回复：${aiResponse}
         confidence: 0,
         mastery: 0,
         createdAt: Date.now(),
+        updatedAt: Date.now(),
+        version: 1,
+        status: 'active',
+        dataSource: 'ai_chat',
         sourceType: 'text'
       };
     }

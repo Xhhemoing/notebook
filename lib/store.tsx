@@ -1,9 +1,9 @@
 'use client';
 
 import React, { createContext, useContext, useReducer, useEffect, useState, useRef } from 'react';
-import { AppState, Action, Subject, KnowledgeNode, Memory } from './types';
+import { AppState, Action, Subject, KnowledgeNode, Memory, Link, Resource, Textbook } from './types';
 import { v4 as uuidv4 } from 'uuid';
-import { openDB } from 'idb';
+import { deleteDB, openDB } from 'idb';
 
 const DB_NAME = 'gaokao-ai-db';
 const STORE_NAME = 'app-state';
@@ -66,6 +66,27 @@ async function loadState(): Promise<AppState | null> {
   } catch (e) {
     console.error('Failed to load state from IDB', e);
     return null;
+  }
+}
+
+export async function clearLocalAppData() {
+  try {
+    await deleteDB(DB_NAME);
+  } catch (e) {
+    console.error('Failed to delete main IndexedDB database', e);
+  }
+
+  try {
+    await deleteDB('ai_study_db');
+  } catch (e) {
+    console.error('Failed to delete image IndexedDB database', e);
+  }
+
+  try {
+    localStorage.removeItem('gaokao-ai-state');
+    localStorage.removeItem('aistudio_state');
+  } catch (e) {
+    console.error('Failed to clear localStorage state', e);
   }
 }
 
@@ -200,10 +221,132 @@ const initialMemories: Memory[] = [
   }
 ];
 
+function buildDerivedLinks(
+  memories: Memory[],
+  knowledgeNodes: KnowledgeNode[],
+  resources: Resource[],
+  textbooks: Textbook[],
+  prevLinks: Link[] = []
+): Link[] {
+  const now = Date.now();
+  const prevMap = new Map(prevLinks.filter(link => link.isDerived).map(link => [link.id, link]));
+  const nodeIdSet = new Set(knowledgeNodes.map(node => node.id));
+  const resourceIdSet = new Set(resources.map(resource => resource.id));
+  const textbookIdSet = new Set(textbooks.map(textbook => textbook.id));
+  const links: Link[] = [];
+
+  for (const memory of memories) {
+    for (const nodeId of Array.from(new Set(memory.knowledgeNodeIds || []))) {
+      if (!nodeIdSet.has(nodeId)) continue;
+      const id = `derived:memory-node:${memory.id}:${nodeId}`;
+      const prev = prevMap.get(id);
+      links.push({
+        id,
+        fromType: 'memory',
+        fromId: memory.id,
+        toType: 'node',
+        toId: nodeId,
+        relationType: 'memory_node',
+        score: 1,
+        isDerived: true,
+        source: 'system',
+        createdAt: prev?.createdAt || now,
+        updatedAt: now,
+      });
+    }
+
+    if (memory.sourceTextbookId && textbookIdSet.has(memory.sourceTextbookId)) {
+      const pagePart = memory.sourceTextbookPage ? `:${memory.sourceTextbookPage}` : '';
+      const id = `derived:memory-textbook:${memory.id}:${memory.sourceTextbookId}${pagePart}`;
+      const prev = prevMap.get(id);
+      links.push({
+        id,
+        fromType: 'memory',
+        fromId: memory.id,
+        toType: 'textbook',
+        toId: memory.sourceTextbookId,
+        relationType: 'memory_textbook',
+        score: 0.9,
+        isDerived: true,
+        source: 'system',
+        createdAt: prev?.createdAt || now,
+        updatedAt: now,
+      });
+    }
+
+    for (const resourceId of Array.from(new Set(memory.sourceResourceIds || []))) {
+      if (!resourceIdSet.has(resourceId)) continue;
+      const id = `derived:memory-resource:${memory.id}:${resourceId}`;
+      const prev = prevMap.get(id);
+      links.push({
+        id,
+        fromType: 'memory',
+        fromId: memory.id,
+        toType: 'resource',
+        toId: resourceId,
+        relationType: 'memory_resource',
+        score: 0.85,
+        isDerived: true,
+        source: 'system',
+        createdAt: prev?.createdAt || now,
+        updatedAt: now,
+      });
+    }
+  }
+
+  for (const node of knowledgeNodes) {
+    if (!node.parentId || !nodeIdSet.has(node.parentId)) continue;
+    const id = `derived:node-parent:${node.id}:${node.parentId}`;
+    const prev = prevMap.get(id);
+    links.push({
+      id,
+      fromType: 'node',
+      fromId: node.id,
+      toType: 'node',
+      toId: node.parentId,
+      relationType: 'node_parent',
+      score: 1,
+      isDerived: true,
+      source: 'system',
+      createdAt: prev?.createdAt || now,
+      updatedAt: now,
+    });
+  }
+
+  return links;
+}
+
+function mergeLinksWithDerived(
+  existingLinks: Link[],
+  memories: Memory[],
+  knowledgeNodes: KnowledgeNode[],
+  resources: Resource[],
+  textbooks: Textbook[]
+): Link[] {
+  const manualLinks = (existingLinks || []).filter(link => !link.isDerived);
+  const derivedLinks = buildDerivedLinks(memories, knowledgeNodes, resources, textbooks, existingLinks || []);
+  const manualIds = new Set(manualLinks.map(link => link.id));
+  return [...manualLinks, ...derivedLinks.filter(link => !manualIds.has(link.id))];
+}
+
+function withDerivedLinks(state: AppState): AppState {
+  return {
+    ...state,
+    links: mergeLinksWithDerived(
+      state.links || [],
+      state.memories || [],
+      state.knowledgeNodes || [],
+      state.resources || [],
+      state.textbooks || []
+    )
+  };
+}
+
 const initialState: AppState = {
   currentSubject: '数学',
   memories: initialMemories,
   knowledgeNodes: initialNodes,
+  links: buildDerivedLinks(initialMemories, initialNodes, [], [], []),
   textbooks: [],
   reviewPlans: [],
   settings: {
@@ -232,82 +375,130 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_SUBJECT':
       return { ...state, currentSubject: action.payload };
     case 'ADD_MEMORY':
-      return {
+      return withDerivedLinks({
         ...state,
-        memories: [{ ...action.payload, updatedAt: action.payload.updatedAt || Date.now() }, ...state.memories],
-      };
+        memories: [{
+          ...action.payload,
+          version: action.payload.version || 1,
+          status: action.payload.status || 'active',
+          dataSource: action.payload.dataSource || 'manual',
+          updatedAt: action.payload.updatedAt || Date.now()
+        }, ...state.memories],
+      });
     case 'UPDATE_MEMORY':
-      return {
+      return withDerivedLinks({
         ...state,
         memories: state.memories.map((m) =>
-          m.id === action.payload.id ? { ...action.payload, updatedAt: Date.now() } : m
+          m.id === action.payload.id ? {
+            ...action.payload,
+            version: (m.version || 1) + 1,
+            status: action.payload.status || 'active',
+            dataSource: action.payload.dataSource || m.dataSource || 'manual',
+            updatedAt: Date.now()
+          } : m
         ),
-      };
+      });
     case 'DELETE_MEMORY':
-      return { ...state, memories: state.memories.filter((m) => m.id !== action.payload) };
+      return withDerivedLinks({ ...state, memories: state.memories.filter((m) => m.id !== action.payload) });
     case 'ADD_NODE':
       if (state.knowledgeNodes.some(n => n.id === action.payload.id)) return state;
-      return {
+      return withDerivedLinks({
         ...state,
-        knowledgeNodes: [...state.knowledgeNodes, { ...action.payload, updatedAt: action.payload.updatedAt || Date.now() }],
-      };
+        knowledgeNodes: [...state.knowledgeNodes, {
+          ...action.payload,
+          version: action.payload.version || 1,
+          status: action.payload.status || 'active',
+          dataSource: action.payload.dataSource || 'manual',
+          updatedAt: action.payload.updatedAt || Date.now()
+        }],
+      });
     case 'UPDATE_NODE':
-      return {
+      return withDerivedLinks({
         ...state,
         knowledgeNodes: state.knowledgeNodes.map((n) =>
-          n.id === action.payload.id ? { ...action.payload, updatedAt: Date.now() } : n
+          n.id === action.payload.id ? {
+            ...action.payload,
+            version: (n.version || 1) + 1,
+            status: action.payload.status || 'active',
+            dataSource: action.payload.dataSource || n.dataSource || 'manual',
+            updatedAt: Date.now()
+          } : n
         ),
-      };
+      });
     case 'DELETE_NODE':
       // Also remove this node from any memories
       const updatedMemories = state.memories.map(m => ({
         ...m,
         knowledgeNodeIds: m.knowledgeNodeIds.filter(id => id !== action.payload)
       }));
-      return { 
+      return withDerivedLinks({ 
         ...state, 
         knowledgeNodes: state.knowledgeNodes.filter((n) => n.id !== action.payload),
         memories: updatedMemories
-      };
+      });
     case 'BATCH_ADD_MEMORIES':
-      return {
+      return withDerivedLinks({
         ...state,
         memories: [
           ...action.payload.map(memory => ({
             ...memory,
+            version: memory.version || 1,
+            status: memory.status || 'active',
+            dataSource: memory.dataSource || 'manual',
             updatedAt: memory.updatedAt || memory.createdAt || Date.now(),
           })),
           ...state.memories,
         ],
-      };
+      });
     case 'BATCH_ADD_NODES':
       const newNodes = action.payload.filter(newNode => !state.knowledgeNodes.some(existingNode => existingNode.id === newNode.id));
-      return {
+      return withDerivedLinks({
         ...state,
         knowledgeNodes: [
           ...state.knowledgeNodes,
-          ...newNodes.map(node => ({ ...node, updatedAt: node.updatedAt || Date.now() })),
+          ...newNodes.map(node => ({
+            ...node,
+            version: node.version || 1,
+            status: node.status || 'active',
+            dataSource: node.dataSource || 'manual',
+            updatedAt: node.updatedAt || Date.now()
+          })),
         ],
-      };
+      });
     case 'BATCH_DELETE_NODES':
       const updatedMemoriesBatch = state.memories.map(m => ({
         ...m,
         knowledgeNodeIds: m.knowledgeNodeIds.filter(id => !action.payload.includes(id))
       }));
-      return { 
+      return withDerivedLinks({ 
         ...state, 
         knowledgeNodes: state.knowledgeNodes.filter((n) => !action.payload.includes(n.id)),
         memories: updatedMemoriesBatch
-      };
+      });
     case 'ADD_TEXTBOOK':
-      return { ...state, textbooks: [...state.textbooks, action.payload] };
-    case 'UPDATE_TEXTBOOK':
-      return {
+      return withDerivedLinks({
         ...state,
-        textbooks: state.textbooks.map(t => t.id === action.payload.id ? action.payload : t)
-      };
+        textbooks: [...state.textbooks, {
+          ...action.payload,
+          version: action.payload.version || 1,
+          status: action.payload.status || 'active',
+          dataSource: action.payload.dataSource || 'manual',
+          updatedAt: action.payload.updatedAt || Date.now()
+        }]
+      });
+    case 'UPDATE_TEXTBOOK':
+      return withDerivedLinks({
+        ...state,
+        textbooks: state.textbooks.map(t => t.id === action.payload.id ? {
+          ...action.payload,
+          version: (t.version || 1) + 1,
+          status: action.payload.status || 'active',
+          dataSource: action.payload.dataSource || t.dataSource || 'manual',
+          updatedAt: Date.now()
+        } : t)
+      });
     case 'DELETE_TEXTBOOK':
-      return { ...state, textbooks: state.textbooks.filter(t => t.id !== action.payload) };
+      return withDerivedLinks({ ...state, textbooks: state.textbooks.filter(t => t.id !== action.payload) });
     case 'ADD_REVIEW_PLAN':
       return { ...state, reviewPlans: [action.payload, ...state.reviewPlans] };
     case 'UPDATE_REVIEW_PLAN':
@@ -326,7 +517,7 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_LAST_SYNC':
       return { ...state, lastSynced: action.payload };
     case 'LOAD_STATE':
-      return { 
+      return withDerivedLinks({ 
         ...initialState, 
         ...action.payload, 
         settings: { ...initialState.settings, ...(action.payload.settings || {}) }, 
@@ -334,8 +525,9 @@ function reducer(state: AppState, action: Action): AppState {
         textbooks: action.payload.textbooks || [],
         reviewPlans: action.payload.reviewPlans || [],
         inputHistory: action.payload.inputHistory || [],
-        resources: action.payload.resources || []
-      };
+        resources: action.payload.resources || [],
+        links: action.payload.links || []
+      });
     case 'ADD_LOG':
       const logWithMetadata = {
         timestamp: Date.now(),
@@ -355,62 +547,111 @@ function reducer(state: AppState, action: Action): AppState {
     case 'DELETE_INPUT_HISTORY':
       return { ...state, inputHistory: state.inputHistory.filter(h => h.id !== action.payload) };
     case 'DELETE_MEMORIES_BY_FUNCTION':
-      return {
+      return withDerivedLinks({
         ...state,
         memories: state.memories.filter(m => 
           !(m.subject === action.payload.subject && m.functionType === action.payload.functionType)
         )
-      };
+      });
     case 'BATCH_DELETE_MEMORIES':
-      return {
+      return withDerivedLinks({
         ...state,
         memories: state.memories.filter(m => !action.payload.includes(m.id))
-      };
+      });
     case 'BATCH_DELETE_TEXTBOOKS':
-      return {
+      return withDerivedLinks({
         ...state,
         textbooks: state.textbooks.filter(t => !action.payload.includes(t.id))
-      };
+      });
     case 'DELETE_SUBJECT_DATA':
-      return {
+      return withDerivedLinks({
         ...state,
         memories: state.memories.filter(m => m.subject !== action.payload.subject),
         knowledgeNodes: state.knowledgeNodes.filter(n => n.subject !== action.payload.subject),
         textbooks: state.textbooks.filter(t => t.subject !== action.payload.subject),
         inputHistory: state.inputHistory.filter(h => h.subject !== action.payload.subject)
-      };
+      });
     case 'DELETE_SUBJECT_NODES':
       const subjectNodesToDelete = new Set(state.knowledgeNodes.filter(n => n.subject === action.payload.subject).map(n => n.id));
       const memoriesAfterSubjectNodeDelete = state.memories.map(m => ({
         ...m,
         knowledgeNodeIds: m.knowledgeNodeIds.filter(id => !subjectNodesToDelete.has(id))
       }));
-      return {
+      return withDerivedLinks({
         ...state,
         knowledgeNodes: state.knowledgeNodes.filter(n => n.subject !== action.payload.subject),
         memories: memoriesAfterSubjectNodeDelete
-      };
+      });
     case 'DELETE_SUBJECT_MISTAKES':
-      return {
+      return withDerivedLinks({
         ...state,
         memories: state.memories.filter(m => !(m.subject === action.payload.subject && m.isMistake))
-      };
+      });
     case 'DELETE_SUBJECT_TEXTBOOKS':
-      return {
+      return withDerivedLinks({
         ...state,
         textbooks: state.textbooks.filter(t => t.subject !== action.payload.subject)
-      };
+      });
     case 'UPDATE_DRAFT':
       return {
         ...state,
         ...action.payload
       };
     case 'ADD_RESOURCE':
-      return { ...state, resources: [action.payload, ...state.resources] };
+      return withDerivedLinks({
+        ...state,
+        resources: [{
+          ...action.payload,
+          version: action.payload.version || 1,
+          status: action.payload.status || 'active',
+          dataSource: action.payload.dataSource || 'manual',
+          updatedAt: action.payload.updatedAt || Date.now()
+        }, ...state.resources]
+      });
     case 'DELETE_RESOURCE':
-      return { ...state, resources: state.resources.filter(r => r.id !== action.payload) };
+      return withDerivedLinks({ ...state, resources: state.resources.filter(r => r.id !== action.payload) });
     case 'SET_RESOURCES':
-      return { ...state, resources: action.payload };
+      return withDerivedLinks({
+        ...state,
+        resources: action.payload.map(resource => ({
+          ...resource,
+          version: resource.version || 1,
+          status: resource.status || 'active',
+          dataSource: resource.dataSource || 'manual',
+          updatedAt: resource.updatedAt || resource.createdAt || Date.now()
+        }))
+      });
+    case 'ADD_LINK':
+      return withDerivedLinks({
+        ...state,
+        links: [
+          ...state.links.filter(link => link.id !== action.payload.id),
+          {
+            ...action.payload,
+            isDerived: action.payload.isDerived || false,
+            source: action.payload.source || 'manual',
+            updatedAt: Date.now()
+          }
+        ]
+      });
+    case 'BATCH_ADD_LINKS':
+      return withDerivedLinks({
+        ...state,
+        links: [
+          ...state.links.filter(existing => !action.payload.some(item => item.id === existing.id)),
+          ...action.payload.map(link => ({
+            ...link,
+            isDerived: link.isDerived || false,
+            source: link.source || 'manual',
+            updatedAt: Date.now()
+          }))
+        ]
+      });
+    case 'DELETE_LINK':
+      return withDerivedLinks({
+        ...state,
+        links: state.links.filter(link => link.isDerived || link.id !== action.payload)
+      });
     case 'REMOVE_DRAFT_PROPOSAL':
       return {
         ...state,

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
-import { useAppContext } from '@/lib/store';
+import { clearLocalAppData, useAppContext } from '@/lib/store';
 import { Shield, Trash2, RefreshCw, AlertTriangle, Sparkles, ShieldAlert, Filter, Database, Search, Zap, Loader2, X, BarChart2 } from 'lucide-react';
 import { Memory, KnowledgeNode, Subject } from '@/lib/types';
 import clsx from 'clsx';
@@ -259,10 +259,10 @@ export default function DataGovernanceSettings() {
     });
   };
 
-  const handleClearAllData = () => {
+  const handleClearAllData = async () => {
     if (confirm('警告：此操作将永久删除所有本地数据（包括记忆、知识图谱、课本等），且无法恢复！\n\n您确定要继续吗？')) {
       if (confirm('最后确认：真的要清空所有数据吗？')) {
-        localStorage.removeItem('aistudio_state');
+        await clearLocalAppData();
         window.location.reload();
       }
     }

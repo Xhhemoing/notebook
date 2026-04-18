@@ -139,4 +139,25 @@
 
 1. 已完成项目结构和关键风险点分析。
 2. 已建立本执行计划文件。
-3. 下一步开始修复第一阶段中的确定性问题。
+3. 已完成第一阶段核心修复：
+   - 修复 `package.json` 中无效的 `clean` 脚本，并新增 `typecheck`
+   - 补齐 `REMOVE_DRAFT_PROPOSAL` action 类型
+   - 修复 `pullFromCloudflare` 参数签名不匹配
+   - 修复自动同步缺失 `Authorization` 与 `syncKey` 的问题
+   - 为 `Memory`、`KnowledgeNode` 增加 `updatedAt`，修复增量同步判断
+   - 将聊天路由、聊天上下文和 AI 配置适配到当前 AI SDK 版本
+   - 调整 `tsconfig.json`，使 `tsc --noEmit` 不再依赖 `.next/types`
+4. 已完成环境修复：
+   - 重新安装并校验依赖
+   - 修复损坏的 `node_modules`
+5. 已完成本地清理能力修复：
+   - 新增统一的 `clearLocalAppData`
+   - 设置页的“清空数据”已切换为清理 IndexedDB 和旧 localStorage 键
+6. 当前验证结果：
+   - `npm run clean` 通过
+   - `npx tsc --noEmit --pretty false` 通过
+   - `npm run lint` 通过
+   - `npm run build` 通过
+7. 下一步建议：
+   - 继续阶段 2，收敛重复文件和历史副本
+   - 继续阶段 3，补齐同步实体范围和删除同步策略

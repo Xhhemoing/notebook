@@ -5,7 +5,7 @@ import { useChat, type UseChatHelpers } from '@ai-sdk/react';
 import { DefaultChatTransport, type FileUIPart, type UIMessage } from 'ai';
 import { useAppContext } from './store';
 import { v4 as uuidv4 } from 'uuid';
-import { Memory } from './types';
+import { createMemoryPayload } from './data/commands';
 
 type GlobalAIChatContextType = UseChatHelpers<UIMessage> & {
   startMistakeAnalysis: (images: string[]) => void;
@@ -57,7 +57,7 @@ export function GlobalAIChatProvider({ children }: { children: React.ReactNode }
       } else if (toolCall.toolName === 'storeMistake') {
         const payload = toolInput || {};
 
-        const mistakeMemory: Memory = {
+        const memoryResult = createMemoryPayload({
           id: uuidv4(),
           subject: state.currentSubject,
           content: payload.originalQuestion || 'Unknown Question',
@@ -73,10 +73,15 @@ export function GlobalAIChatProvider({ children }: { children: React.ReactNode }
           correctAnswer: payload.correctAnswer,
           errorReason: payload.explanation,
           visualDescription: payload.coreConcept,
-        };
+          dataSource: 'mistake_analysis'
+        });
 
-        dispatch({ type: 'ADD_MEMORY', payload: mistakeMemory });
-        console.log('Mistake memory added via AI tool call.');
+        if (memoryResult.ok) {
+          dispatch({ type: 'ADD_MEMORY', payload: memoryResult.value });
+          console.log('Mistake memory added via AI tool call.');
+        } else {
+          console.warn('Failed to store mistake memory:', memoryResult.error);
+        }
       }
     },
   });
