@@ -122,6 +122,22 @@ export function MemoryBank() {
       type: 'UPDATE_MEMORY',
       payload: { ...memory, content: editContent, notes: editNotes }
     });
+    dispatch({
+      type: 'ADD_FEEDBACK_EVENT',
+      payload: {
+        id: crypto.randomUUID(),
+        timestamp: Date.now(),
+        subject: state.currentSubject,
+        targetType: 'memory',
+        targetId: memory.id,
+        signalType: 'memory_edited',
+        sentiment: 'neutral',
+        note: 'Memory content edited by user',
+        metadata: {
+          workflow: memory.ingestionMode || 'quick',
+        },
+      }
+    });
     setEditingId(null);
   };
 
@@ -415,6 +431,22 @@ export function MemoryBank() {
                                   title: '删除记忆',
                                   message: '确定要删除这条记忆吗？',
                                   onConfirm: () => {
+                                    dispatch({
+                                      type: 'ADD_FEEDBACK_EVENT',
+                                      payload: {
+                                        id: crypto.randomUUID(),
+                                        timestamp: Date.now(),
+                                        subject: state.currentSubject,
+                                        targetType: 'memory',
+                                        targetId: memory.id,
+                                        signalType: 'memory_deleted',
+                                        sentiment: 'negative',
+                                        note: 'Memory deleted from bank',
+                                        metadata: {
+                                          workflow: memory.ingestionMode || 'quick',
+                                        },
+                                      }
+                                    });
                                     dispatch({ type: 'DELETE_MEMORY', payload: memory.id });
                                     setConfirmModal(null);
                                   }

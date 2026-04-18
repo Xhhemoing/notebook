@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useMemo, useCallback } from 'react';
 import { useAppContext } from '@/lib/store';
-import { Database, UploadCloud, FileText, Image as ImageIcon, File, Trash2, Download, Search, HardDrive, Folder, ChevronRight, FolderPlus, AlertTriangle, ShieldAlert } from 'lucide-react';
+import { Database, UploadCloud, FileText, Image as ImageIcon, File, Trash2, Download, Search, HardDrive, Folder, ChevronRight, FolderPlus, AlertTriangle, ShieldAlert, Pin, PinOff } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { Resource } from '@/lib/types';
 import { clsx } from 'clsx';
@@ -18,6 +18,8 @@ async function processFile(file: File, parentId: string | null, dispatch: any, s
       createdAt: Date.now(),
       data: reader.result as string,
       subject: subject,
+      origin: 'manual',
+      retentionPolicy: 'manual',
       isFolder: false,
       parentId: parentId
     };
@@ -40,6 +42,8 @@ async function traverseFileTree(item: any, parentId: string | null, dispatch: an
       size: 0,
       createdAt: Date.now(),
       subject: subject,
+      origin: 'manual',
+      retentionPolicy: 'manual',
       isFolder: true,
       parentId: parentId
     };
@@ -117,6 +121,8 @@ export function ResourceLibrary() {
           size: 0,
           createdAt: Date.now(),
           subject: state.currentSubject,
+          origin: 'manual',
+          retentionPolicy: 'manual',
           isFolder: true,
           parentId: currentFolderId
         };
@@ -292,10 +298,54 @@ export function ResourceLibrary() {
                     {resource.name}
                   </h3>
                   {!resource.isFolder && (
-                    <span className="text-[10px] text-slate-500 mt-1">{formatSize(resource.size)}</span>
+                    <>
+                      <span className="text-[10px] text-slate-500 mt-1">{formatSize(resource.size)}</span>
+                      <span className="text-[10px] text-slate-600 mt-1">
+                        {resource.retentionPolicy === 'auto' && resource.expiresAt
+                          ? `Auto clear ${new Date(resource.expiresAt).toLocaleDateString()}`
+                          : resource.pinnedAt
+                            ? 'Pinned'
+                            : 'Manual keep'}
+                      </span>
+                    </>
                   )}
                   
                   <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col gap-1">
+                    {!resource.isFolder && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          dispatch({
+                            type: 'UPDATE_RESOURCE',
+                            payload: {
+                              ...resource,
+                              retentionPolicy: resource.pinnedAt ? 'auto' : 'keep',
+                              pinnedAt: resource.pinnedAt ? undefined : Date.now(),
+                            },
+                          });
+                          dispatch({
+                            type: 'ADD_FEEDBACK_EVENT',
+                            payload: {
+                              id: uuidv4(),
+                              timestamp: Date.now(),
+                              subject: state.currentSubject,
+                              targetType: 'resource',
+                              targetId: resource.id,
+                              signalType: 'resource_pinned',
+                              sentiment: 'positive',
+                              note: resource.pinnedAt ? 'Resource unpinned' : 'Resource pinned',
+                              metadata: {
+                                workflow: resource.origin === 'chat_upload' ? 'chat' : 'quick',
+                              },
+                            },
+                          });
+                        }}
+                        className="p-1.5 bg-slate-800 text-slate-400 hover:text-amber-300 rounded-md hover:bg-slate-700 transition-colors shadow-lg"
+                        title={resource.pinnedAt ? '取消固定' : '固定保留'}
+                      >
+                        {resource.pinnedAt ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
+                      </button>
+                    )}
                     {resource.data && !resource.isFolder && (
                       <a 
                         href={resource.data} 

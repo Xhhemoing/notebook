@@ -4,8 +4,9 @@ import { useAppContext } from '@/lib/store';
 import { Database, Trash2, Edit, Search, FileText, BrainCircuit, Network, HardDrive, CheckSquare, Square, Filter, AlertTriangle, Zap, RefreshCw, Layers, ShieldAlert, Sparkles } from 'lucide-react';
 import { useState, useMemo } from 'react';
 import { clsx } from 'clsx';
-import { Memory, KnowledgeNode, Textbook, Subject, Link } from '@/lib/types';
+import { Subject, Link } from '@/lib/types';
 import { calculateMetrics } from '@/lib/fsrs';
+import { evaluateMemoryQuality, getGraphIntegrityIssueCount, getGraphIntegrityReport, getMemoryQualityLevel } from '@/lib/data/quality';
 
 export function DataManager() {
   const { state, dispatch } = useAppContext();
@@ -341,6 +342,55 @@ export function DataManager() {
     };
   }, [state.currentSubject, state.resources]);
 
+  const memoryQualityInsights = useMemo(() => {
+    const subjectMemories = state.memories.filter((memory) => memory.subject === state.currentSubject);
+    const lowQuality: Array<{ id: string; score: number; createdAt: number }> = [];
+    let missingNodeLinkCount = 0;
+    let missingEvidenceCount = 0;
+    let withWarningsCount = 0;
+    let qualityScoreSum = 0;
+
+    for (const memory of subjectMemories) {
+      const quality = evaluateMemoryQuality(memory);
+      qualityScoreSum += quality.score;
+      const level = getMemoryQualityLevel(quality.score);
+      if (level === 'low') {
+        lowQuality.push({ id: memory.id, score: quality.score, createdAt: memory.createdAt || 0 });
+      }
+      if (quality.flags.length > 0) {
+        withWarningsCount += 1;
+      }
+      if (quality.flags.includes('missing_node_link')) {
+        missingNodeLinkCount += 1;
+      }
+      if (quality.flags.includes('missing_evidence')) {
+        missingEvidenceCount += 1;
+      }
+    }
+
+    const averageScore = subjectMemories.length ? Math.round(qualityScoreSum / subjectMemories.length) : 0;
+    lowQuality.sort((a, b) => a.score - b.score || b.createdAt - a.createdAt);
+
+    return {
+      total: subjectMemories.length,
+      averageScore,
+      lowQualityCount: lowQuality.length,
+      withWarningsCount,
+      missingNodeLinkCount,
+      missingEvidenceCount,
+      sampleLowQualityIds: lowQuality.slice(0, 5).map((item) => item.id),
+    };
+  }, [state.currentSubject, state.memories]);
+
+  const graphIntegrityInsights = useMemo(() => {
+    const subjectNodes = state.knowledgeNodes.filter((node) => node.subject === state.currentSubject);
+    const report = getGraphIntegrityReport(subjectNodes);
+    return {
+      ...report,
+      issueCount: getGraphIntegrityIssueCount(report),
+    };
+  }, [state.currentSubject, state.knowledgeNodes]);
+
   const handleSaveMemoryEdit = (id: string) => {
     const memory = state.memories.find(m => m.id === id);
     if (memory) {
@@ -492,6 +542,84 @@ export function DataManager() {
           ) : (
             <p className="text-[11px] text-slate-500">当前学科还没有资源文件。</p>
           )}
+        </div>
+
+        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-amber-400" />
+              Data Quality Radar
+            </h3>
+            <span className="text-[10px] text-slate-500 uppercase tracking-wider">
+              Avg {memoryQualityInsights.averageScore}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+              <p className="text-[10px] text-slate-500 uppercase">Low Quality</p>
+              <p className="text-lg font-black text-rose-400">{memoryQualityInsights.lowQualityCount}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+              <p className="text-[10px] text-slate-500 uppercase">Warnings</p>
+              <p className="text-lg font-black text-amber-400">{memoryQualityInsights.withWarningsCount}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+              <p className="text-[10px] text-slate-500 uppercase">Total</p>
+              <p className="text-lg font-black text-indigo-400">{memoryQualityInsights.total}</p>
+            </div>
+          </div>
+          <p className="text-[11px] text-slate-400 mb-3">
+            Missing node links: {memoryQualityInsights.missingNodeLinkCount} | Missing evidence:{' '}
+            {memoryQualityInsights.missingEvidenceCount}
+          </p>
+          <button
+            onClick={() => {
+              setActiveTab('memories');
+              setSubjectFilter(state.currentSubject);
+              setSelectedIds(new Set(memoryQualityInsights.sampleLowQualityIds));
+            }}
+            disabled={memoryQualityInsights.sampleLowQualityIds.length === 0}
+            className="w-full px-3 py-2 rounded-xl text-xs font-bold uppercase tracking-widest bg-slate-800 text-slate-200 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            Select Low Quality (Top 5)
+          </button>
+        </div>
+
+        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-400" />
+              Graph Integrity
+            </h3>
+            <span className="text-[10px] text-slate-500 uppercase tracking-wider">
+              Issues {graphIntegrityInsights.issueCount}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+              <p className="text-[10px] text-slate-500 uppercase">Cycle</p>
+              <p className="text-lg font-black text-rose-400">{graphIntegrityInsights.cycleBreakCount}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+              <p className="text-[10px] text-slate-500 uppercase">Orphan</p>
+              <p className="text-lg font-black text-amber-400">{graphIntegrityInsights.orphanParentCount}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+              <p className="text-[10px] text-slate-500 uppercase">Duplicate</p>
+              <p className="text-lg font-black text-indigo-400">{graphIntegrityInsights.duplicateSiblingNameCount}</p>
+            </div>
+          </div>
+          <p className="text-[11px] text-slate-400 mb-3">
+            Cross-subject parent: {graphIntegrityInsights.crossSubjectParentCount} | Self-parent:{' '}
+            {graphIntegrityInsights.selfParentCount} | Normalized order: {graphIntegrityInsights.normalizedOrderCount}
+          </p>
+          <button
+            onClick={() => dispatch({ type: 'SET_CORRELATIONS', payload: [...state.knowledgeNodes] })}
+            className="w-full px-3 py-2 rounded-xl text-xs font-bold uppercase tracking-widest bg-slate-800 text-slate-200 hover:bg-slate-700 transition-colors flex items-center justify-center gap-2"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Re-apply Graph Rules
+          </button>
         </div>
       </div>
 

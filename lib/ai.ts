@@ -699,8 +699,16 @@ export async function parseNotes(
 ): Promise<{ analysisProcess: string; parsedItems: any[]; newNodes: KnowledgeNode[]; deletedNodeIds: string[]; identifiedSubject: string }> {
   // Strict Subject Isolation
   const subjectNodes = allNodes.filter(n => n.subject === subject);
+  const feedbackDirective = `
+AI attention notes:
+${settings.aiAttentionNotes || 'None.'}
+
+Feedback-derived preferences:
+${settings.feedbackLearningNotes || 'None.'}
+`;
 
   const prompt = `
+${feedbackDirective}
 你是一个高考复习与错题本AI助手。请分析以下学生的作业/笔记/试卷内容（可能包含文本或多张图片/PDF/Word内容）。
 当前用户选择的科目：【${subject}】
 
@@ -1215,8 +1223,16 @@ export async function chatWithAI(
     if (m.notes) contextStr += `\n[补充说明] ${m.notes}`;
     return contextStr;
   }).join('\n\n');
+  const feedbackContext = `
+AI attention notes:
+${settings.aiAttentionNotes || 'None.'}
+
+Feedback-derived preferences:
+${settings.feedbackLearningNotes || 'None.'}
+`;
 
   const prompt = `
+${feedbackContext}
 你是一个极度智能、专业且具有同理心的AI辅导老师，你的目标是帮助学生深度理解知识并建立长效记忆。你的思考逻辑和表达风格应向 OpenClaw 靠近：逻辑严密、分步骤思考、善于总结、能发现知识间的深层联系。
 
 当前科目：【${subject}】

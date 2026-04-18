@@ -1,8 +1,9 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Memory } from '../types';
 import { MemoryCreateInput, memoryCreateSchema } from './schemas';
+import { evaluateMemoryQuality, MEMORY_QUALITY_RULE_VERSION } from './quality';
 
-type CommandResult<T> = { ok: true; value: T } | { ok: false; error: string };
+type CommandResult<T> = { ok: true; value: T; warnings?: string[] } | { ok: false; error: string };
 
 function clampScore(value: number, fallback: number) {
   if (!Number.isFinite(value)) return fallback;
@@ -25,9 +26,15 @@ export function createMemoryPayload(input: MemoryCreateInput): CommandResult<Mem
   const now = Date.now();
   const data = parsed.data;
   const content = normalizeText(data.content);
+  const knowledgeNodeIds = Array.from(new Set(data.knowledgeNodeIds || []));
+  const sourceResourceIds = Array.from(new Set(data.sourceResourceIds || []));
+  const hasImageReference = Boolean(data.imageUrl) || (data.imageUrls || []).length > 0;
 
   if (!content) {
     return { ok: false, error: 'content is empty after normalization' };
+  }
+  if (data.sourceType === 'image' && !hasImageReference) {
+    return { ok: false, error: 'sourceType=image requires imageUrl or imageUrls' };
   }
 
   const payload = {
@@ -38,8 +45,8 @@ export function createMemoryPayload(input: MemoryCreateInput): CommandResult<Mem
     functionType: data.functionType.trim(),
     purposeType: data.purposeType.trim(),
     sourceType: data.sourceType || 'text',
-    knowledgeNodeIds: Array.from(new Set(data.knowledgeNodeIds || [])),
-    sourceResourceIds: Array.from(new Set(data.sourceResourceIds || [])),
+    knowledgeNodeIds,
+    sourceResourceIds,
     confidence: clampScore(data.confidence ?? 50, 50),
     mastery: clampScore(data.mastery ?? 0, 0),
     createdAt: data.createdAt ?? now,
@@ -49,7 +56,12 @@ export function createMemoryPayload(input: MemoryCreateInput): CommandResult<Mem
     dataSource: data.dataSource ?? 'manual',
   } as Memory;
 
-  return { ok: true, value: payload };
+  const quality = evaluateMemoryQuality(payload);
+  payload.qualityScore = quality.score;
+  payload.qualityFlags = quality.flags;
+  payload.qualityRuleVersion = MEMORY_QUALITY_RULE_VERSION;
+
+  return { ok: true, value: payload, warnings: quality.flags };
 }
 
 export function createMemoryPayloadOrThrow(input: MemoryCreateInput): Memory {

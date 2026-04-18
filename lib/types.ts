@@ -2,6 +2,26 @@ export type Subject = string;
 
 export type MemoryFunction = string;
 export type MemoryPurpose = string;
+export type IngestionMode = 'quick' | 'image_pro' | 'exam';
+export type ResourceOrigin =
+  | 'manual'
+  | 'input_upload'
+  | 'chat_upload'
+  | 'textbook_upload'
+  | 'resource_import'
+  | 'derived';
+export type ResourceRetentionPolicy = 'keep' | 'auto' | 'manual';
+export type FeedbackTargetType = 'memory' | 'chat' | 'ingestion' | 'resource' | 'profile';
+export type FeedbackSignalType =
+  | 'workflow_used'
+  | 'ingestion_regenerated'
+  | 'memory_edited'
+  | 'memory_deleted'
+  | 'memory_promoted'
+  | 'chat_helpful'
+  | 'chat_inaccurate'
+  | 'resource_pinned'
+  | 'preference_note';
 
 export interface FSRSData {
   due: number; // timestamp
@@ -29,9 +49,14 @@ export interface Memory {
   sourceTextbookId?: string;
   sourceTextbookPage?: number;
   sourceResourceIds?: string[];
+  qualityScore?: number; // 0-100 ingestion quality score
+  qualityFlags?: string[]; // quality rule flags for diagnostics
+  qualityRuleVersion?: number;
   functionType: MemoryFunction;
   purposeType: MemoryPurpose;
   knowledgeNodeIds: string[];
+  ingestionMode?: IngestionMode;
+  ingestionSessionId?: string;
   confidence: number; // 0-100, maps to FSRS retrievability
   mastery: number; // 0-100, maps to FSRS stability
   createdAt: number;
@@ -110,9 +135,16 @@ export interface Settings {
   homeworkPreferences?: string;
   userSymbols?: string; // Meaning of user symbols
   studentProfile?: string; // AI's perception of the student
+  aiAttentionNotes?: string; // Manually curated instructions for AI
+  feedbackLearningNotes?: string; // Auto-summarized from user feedback events
   dailyReviewLimit: number;
   reviewBatchSize: number;
   enableLogging: boolean;
+  autoCleanupLogs?: boolean;
+  logRetentionDays?: number;
+  autoCleanupResources?: boolean;
+  resourceAutoCleanupDays?: number;
+  exportOptimizationIncludeImages?: boolean;
   minReviewDifficulty: number;
   maxReviewDifficulty: number;
   fontSize?: 'small' | 'base' | 'medium' | 'large';
@@ -126,10 +158,15 @@ export interface Settings {
 export interface AILog {
   id: string;
   timestamp: number;
-  type: 'parse' | 'chat' | 'graph' | 'review';
+  type: 'parse' | 'chat' | 'graph' | 'review' | 'ingestion' | 'profile' | 'cleanup';
   model: string;
   prompt: string;
   response: string;
+  subject?: Subject;
+  sessionId?: string;
+  workflow?: IngestionMode | 'chat';
+  resourceIds?: string[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface TextbookPage {
@@ -179,13 +216,18 @@ export interface InputHistoryItem {
   id: string;
   timestamp: number;
   subject: Subject;
+  workflow: IngestionMode;
   input: string;
   images: string[];
+  imageResourceIds?: string[];
+  supplementaryInstruction?: string;
   parsedItems: any[];
   newNodes: any[];
   deletedNodeIds: string[];
   aiAnalysis: string;
   identifiedSubject: string;
+  savedMemoryIds?: string[];
+  options?: Record<string, unknown>;
 }
 
 export interface Resource {
@@ -201,9 +243,27 @@ export interface Resource {
   deletedAt?: number;
   data?: string; // base64 for local, URL for remote
   subject: Subject;
+  origin?: ResourceOrigin;
+  retentionPolicy?: ResourceRetentionPolicy;
+  expiresAt?: number;
+  pinnedAt?: number;
+  lastAccessedAt?: number;
+  description?: string;
   tags?: string[];
   parentId?: string | null;
   isFolder?: boolean;
+}
+
+export interface UserFeedbackEvent {
+  id: string;
+  timestamp: number;
+  subject: Subject;
+  targetType: FeedbackTargetType;
+  targetId?: string;
+  signalType: FeedbackSignalType;
+  sentiment: 'positive' | 'negative' | 'neutral';
+  note?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export type LinkEntityType = 'memory' | 'node' | 'textbook' | 'resource';
@@ -232,6 +292,7 @@ export interface AppState {
   settings: Settings;
   lastSynced?: number;
   logs: AILog[];
+  feedbackEvents: UserFeedbackEvent[];
   lastNodesState?: KnowledgeNode[]; // For one-level undo
   inputHistory: InputHistoryItem[];
   draftInput?: string;
@@ -264,6 +325,8 @@ export type Action =
   | { type: 'LOAD_STATE'; payload: AppState }
   | { type: 'ADD_LOG'; payload: Omit<AILog, 'id' | 'timestamp'> & { id?: string; timestamp?: number } }
   | { type: 'CLEAR_LOGS' }
+  | { type: 'ADD_FEEDBACK_EVENT'; payload: UserFeedbackEvent }
+  | { type: 'DELETE_FEEDBACK_EVENT'; payload: string }
   | { type: 'SAVE_NODES_STATE' }
   | { type: 'UNDO_NODES' }
   | { type: 'ADD_INPUT_HISTORY'; payload: InputHistoryItem }
@@ -277,9 +340,12 @@ export type Action =
   | { type: 'DELETE_SUBJECT_TEXTBOOKS'; payload: { subject: Subject } }
   | { type: 'UPDATE_DRAFT'; payload: { draftInput?: string; draftImages?: string[]; draftGraphProposal?: { reasoning: string; operations: any[] } | null; } }
   | { type: 'ADD_RESOURCE'; payload: Resource }
+  | { type: 'UPDATE_RESOURCE'; payload: Resource }
   | { type: 'DELETE_RESOURCE'; payload: string }
+  | { type: 'BATCH_DELETE_RESOURCES'; payload: string[] }
   | { type: 'SET_RESOURCES'; payload: Resource[] }
   | { type: 'ADD_LINK'; payload: Link }
   | { type: 'BATCH_ADD_LINKS'; payload: Link[] }
   | { type: 'DELETE_LINK'; payload: string }
-  | { type: 'REMOVE_DRAFT_PROPOSAL'; payload: string };
+  | { type: 'REMOVE_DRAFT_PROPOSAL'; payload: string }
+  | { type: 'RUN_AUTO_CLEANUP'; payload?: { now?: number } };

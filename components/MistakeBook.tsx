@@ -59,12 +59,44 @@ export function MistakeBook() {
         errorReason: editErrorReason
       }
     });
+    dispatch({
+      type: 'ADD_FEEDBACK_EVENT',
+      payload: {
+        id: uuidv4(),
+        timestamp: Date.now(),
+        subject: state.currentSubject,
+        targetType: 'memory',
+        targetId: memory.id,
+        signalType: 'memory_edited',
+        sentiment: 'neutral',
+        note: 'Mistake memory edited by user',
+        metadata: {
+          workflow: memory.ingestionMode || 'image_pro',
+        },
+      }
+    });
     setEditingId(null);
   };
 
   const toggleMistake = (id: string, currentStatus: boolean | undefined) => {
     const memory = state.memories.find(m => m.id === id);
     if (memory) {
+      dispatch({
+        type: 'ADD_FEEDBACK_EVENT',
+        payload: {
+          id: uuidv4(),
+          timestamp: Date.now(),
+          subject: state.currentSubject,
+          targetType: 'memory',
+          targetId: id,
+          signalType: 'memory_promoted',
+          sentiment: !currentStatus ? 'positive' : 'neutral',
+          note: !currentStatus ? 'Marked as mistake' : 'Removed from mistake set',
+          metadata: {
+            workflow: memory.ingestionMode || 'image_pro',
+          },
+        },
+      });
       dispatch({ type: 'UPDATE_MEMORY', payload: { ...memory, isMistake: !currentStatus } });
     }
   };
@@ -343,7 +375,25 @@ export function MistakeBook() {
                             <Edit className="w-5 h-5" />
                           </button>
                           <button
-                            onClick={() => dispatch({ type: 'DELETE_MEMORY', payload: memory.id })}
+                            onClick={() => {
+                              dispatch({
+                                type: 'ADD_FEEDBACK_EVENT',
+                                payload: {
+                                  id: uuidv4(),
+                                  timestamp: Date.now(),
+                                  subject: state.currentSubject,
+                                  targetType: 'memory',
+                                  targetId: memory.id,
+                                  signalType: 'memory_deleted',
+                                  sentiment: 'negative',
+                                  note: 'Mistake memory deleted by user',
+                                  metadata: {
+                                    workflow: memory.ingestionMode || 'image_pro',
+                                  },
+                                },
+                              });
+                              dispatch({ type: 'DELETE_MEMORY', payload: memory.id });
+                            }}
                             className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
                             title="删除"
                           >

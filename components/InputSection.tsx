@@ -1,1264 +1,1203 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { useAppContext } from '@/lib/store';
-import { parseNotes, getEmbedding } from '@/lib/ai';
-import { Loader2, UploadCloud, FileText, CheckCircle2, Info, ChevronDown, ChevronUp, Trash2, PlusCircle, Sparkles, X, Image as ImageIcon, AlertCircle, History, BrainCircuit } from 'lucide-react';
-import { clsx } from 'clsx';
-import { getInitialFSRSData } from '@/lib/fsrs';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  BrainCircuit,
+  CheckCircle2,
+  FileImage,
+  FileText,
+  History,
+  Image as ImageIcon,
+  Info,
+  Layers3,
+  Loader2,
+  ScanLine,
+  Sparkles,
+  Trash2,
+  UploadCloud,
+  Wand2,
+  X,
+} from 'lucide-react';
 import Markdown from 'react-markdown';
-import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import remarkMath from 'remark-math';
+import { clsx } from 'clsx';
 import { v4 as uuidv4 } from 'uuid';
-import { InputHistoryItem } from '@/lib/types';
+
+import { useAppContext } from '@/lib/store';
+import { parseNotes } from '@/lib/ai';
+import { getInitialFSRSData } from '@/lib/fsrs';
+import { createMemoryPayload } from '@/lib/data/commands';
+import { getAutoExpireAt } from '@/lib/feedback';
+import { InputHistoryItem, IngestionMode, Resource, UserFeedbackEvent } from '@/lib/types';
 import { ModelSelector } from '@/components/ModelSelector';
 
-import { saveImage } from '@/lib/db';
-import { createMemoryPayload } from '@/lib/data/commands';
+type DraftAsset = {
+  resourceId: string;
+  name: string;
+  preview: string;
+  type: string;
+  size: number;
+};
+
+type ReviewItem = {
+  content: string;
+  type?: 'concept' | 'qa' | 'vocabulary';
+  questionType?: string;
+  correctAnswer?: string;
+  notes?: string;
+  nodeIds?: string[];
+  isMistake?: boolean;
+  wrongAnswer?: string;
+  errorReason?: string;
+  vocabularyData?: {
+    meaning?: string;
+    usage?: string;
+    context?: string;
+    mnemonics?: string;
+    synonyms?: string[];
+  };
+  visualDescription?: string;
+  functionType?: string;
+  purposeType?: string;
+  source?: string;
+  region?: string;
+};
+
+type PendingReview = {
+  id: string;
+  workflow: IngestionMode;
+  parsedItems: ReviewItem[];
+  newNodes: any[];
+  deletedNodeIds: string[];
+  aiAnalysis: string;
+  identifiedSubject: string;
+  options: Record<string, unknown>;
+};
+
+type WorkflowMeta = {
+  label: string;
+  subtitle: string;
+  icon: typeof Wand2;
+  accent: string;
+  hint: string;
+};
+
+const WORKFLOW_META: Record<IngestionMode, WorkflowMeta> = {
+  quick: {
+    label: '常规快速录入',
+    subtitle: '文本为主，适合知识点、错因、方法论快速入库',
+    icon: Sparkles,
+    accent: 'emerald',
+    hint: '优先少步骤、快整理，适合零散笔记和口述补充。',
+  },
+  image_pro: {
+    label: '图片专业处理',
+    subtitle: '保留批注语义，强化图像清晰度与题目拆分',
+    icon: ScanLine,
+    accent: 'amber',
+    hint: '适合拍照错题、作业批注、手写笔记和需要精准保留视觉信息的材料。',
+  },
+  exam: {
+    label: '整卷分析',
+    subtitle: '针对试卷、答题卡和整套资料做系统拆解',
+    icon: Layers3,
+    accent: 'indigo',
+    hint: '适合整页、多题场景，会更关注分布、薄弱点和高频考法。',
+  },
+};
+
+const DEFAULT_FUNCTIONS = ['细碎记忆', '方法论', '关联型记忆', '系统型'];
+const DEFAULT_PURPOSES = ['记忆型', '内化型', '补充知识型', '系统型'];
+
+function createFeedbackEvent(
+  partial: Omit<UserFeedbackEvent, 'id' | 'timestamp'>
+): UserFeedbackEvent {
+  return {
+    id: uuidv4(),
+    timestamp: Date.now(),
+    ...partial,
+  };
+}
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function modeBadgeClass(mode: IngestionMode, active: boolean) {
+  if (!active) return 'border-slate-800 bg-slate-900/60 text-slate-400 hover:border-slate-700 hover:text-slate-200';
+
+  if (mode === 'quick') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
+  if (mode === 'image_pro') return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
+  return 'border-indigo-500/30 bg-indigo-500/10 text-indigo-200';
+}
+
+async function enhanceDocumentImage(base64: string): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(base64);
+        return;
+      }
+
+      const maxDimension = 2200;
+      let { width, height } = img;
+      if (width > maxDimension || height > maxDimension) {
+        if (width >= height) {
+          height = Math.round((height / width) * maxDimension);
+          width = maxDimension;
+        } else {
+          width = Math.round((width / height) * maxDimension);
+          height = maxDimension;
+        }
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      ctx.drawImage(img, 0, 0, width, height);
+
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const { data } = imageData;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        const normalized = Math.max(0, Math.min(255, (gray - 42) * 1.55));
+        data[i] = normalized;
+        data[i + 1] = normalized;
+        data[i + 2] = normalized;
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+      resolve(canvas.toDataURL('image/jpeg', 0.88));
+    };
+
+    img.onerror = () => resolve(base64);
+    img.src = base64;
+  });
+}
+
+function buildWorkflowInstruction(
+  workflow: IngestionMode,
+  options: Record<string, boolean>,
+  supplementaryInstruction: string
+) {
+  const lines: string[] = [];
+
+  if (workflow === 'quick') {
+    lines.push('【常规快速录入】优先快速拆解为准确、可复习的独立记忆项，避免冗长总结。');
+  }
+
+  if (workflow === 'image_pro') {
+    lines.push('【图片专业处理】重点保留批注、手写标记、题干边界、错因线索与视觉上下文。');
+    if (options.enhanceImage) lines.push('- 已启用图片增强，请优先利用清晰度提升后的细节。');
+    if (options.preserveAnnotations) lines.push('- 请把用户的圈点、箭头、问号、打叉等视觉标记作为高优先级信号。');
+    if (options.splitQuestions) lines.push('- 若一张图中包含多题，请按题目边界自动拆分。');
+    if (options.extractVocabulary) lines.push('- 对英语或语言类材料中的标注词汇，优先提取为 vocabulary。');
+    if (options.prioritizeAccuracy) lines.push('- 不确定时请显式说明不确定，不要强行补全。');
+  }
+
+  if (workflow === 'exam') {
+    lines.push('【整卷分析】请从整套材料中提取错题、薄弱知识点、常考题型和高频失误。');
+    lines.push('- 需要给出题目分布、知识点聚类和后续复习建议。');
+    if (options.splitQuestions) lines.push('- 按题号拆分并保留题组上下文。');
+    if (options.prioritizeAccuracy) lines.push('- 对识别不清的题面保留原样并标记待确认。');
+  }
+
+  if (supplementaryInstruction.trim()) {
+    lines.push(`【用户补充说明】${supplementaryInstruction.trim()}`);
+  }
+
+  return lines.join('\n');
+}
+
+function pickPrimaryPreview(assets: DraftAsset[]) {
+  return assets.find((asset) => asset.type.startsWith('image/'))?.preview || assets[0]?.preview;
+}
 
 export function InputSection() {
   const { state, dispatch } = useAppContext();
+  const [workflow, setWorkflow] = useState<IngestionMode>('quick');
   const [input, setInput] = useState(state.draftInput || '');
-  const [images, setImages] = useState<string[]>(state.draftImages || []);
-  const [draftResourceIds, setDraftResourceIds] = useState<string[]>([]);
-  const [isScanMode, setIsScanMode] = useState(false);
-  const [isFullExamMode, setIsFullExamMode] = useState(false);
-
-  // Sync draft state
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      if (input !== state.draftInput || images !== state.draftImages) {
-        dispatch({ type: 'UPDATE_DRAFT', payload: { draftInput: input, draftImages: images } });
-      }
-    }, 500);
-    return () => clearTimeout(timeoutId);
-  }, [input, images, dispatch, state.draftInput, state.draftImages]);
-  const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [explicitFunction, setExplicitFunction] = useState<string>('auto');
-  const [explicitPurpose, setExplicitPurpose] = useState<string>('auto');
-  const [isMistake, setIsMistake] = useState(false);
   const [supplementaryInstruction, setSupplementaryInstruction] = useState('');
-  const [isDragging, setIsDragging] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const [analysisProcess, setAnalysisProcess] = useState<string | null>(null);
-  const [pendingReview, setPendingReview] = useState<{
-    parsedItems: any[];
-    newNodes: any[];
-    deletedNodeIds: string[];
-    aiAnalysis: string;
-    identifiedSubject: string;
-  } | null>(null);
-  const [collapsedItems, setCollapsedItems] = useState<Set<number>>(new Set());
+  const [draftAssets, setDraftAssets] = useState<DraftAsset[]>([]);
+  const [loading, setLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [selectedModel, setSelectedModel] = useState(state.settings.parseModel);
+  const [pendingReview, setPendingReview] = useState<PendingReview | null>(null);
+  const [explicitFunction, setExplicitFunction] = useState<string>('auto');
+  const [explicitPurpose, setExplicitPurpose] = useState<string>('auto');
+  const [markAsMistake, setMarkAsMistake] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [imageOptions, setImageOptions] = useState({
+    enhanceImage: true,
+    preserveAnnotations: true,
+    splitQuestions: true,
+    extractVocabulary: true,
+    prioritizeAccuracy: true,
+  });
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Sync selectedModel if default changes
   useEffect(() => {
     setSelectedModel(state.settings.parseModel);
   }, [state.settings.parseModel]);
 
-  const processImageToScan = (base64: string): Promise<string> => {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(base64);
-          return;
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      dispatch({
+        type: 'UPDATE_DRAFT',
+        payload: {
+          draftInput: input,
+          draftImages: draftAssets.map((asset) => asset.preview),
+        },
+      });
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
+  }, [dispatch, draftAssets, input]);
+
+  const filteredHistory = useMemo(
+    () => state.inputHistory.filter((item) => item.subject === state.currentSubject),
+    [state.currentSubject, state.inputHistory]
+  );
+
+  const functionOptions = useMemo(
+    () =>
+      Array.from(new Set([...DEFAULT_FUNCTIONS, ...state.memories.map((memory) => memory.functionType)])).filter(
+        Boolean
+      ),
+    [state.memories]
+  );
+
+  const purposeOptions = useMemo(
+    () =>
+      Array.from(new Set([...DEFAULT_PURPOSES, ...state.memories.map((memory) => memory.purposeType)])).filter(
+        Boolean
+      ),
+    [state.memories]
+  );
+
+  const addAssetFromFile = useCallback(
+    async (file: File) => {
+      if (
+        file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+        file.name.toLowerCase().endsWith('.docx')
+      ) {
+        try {
+          const mammoth = await import('mammoth');
+          const arrayBuffer = await file.arrayBuffer();
+          const result = await mammoth.extractRawText({ arrayBuffer });
+          setInput((previous) =>
+            [previous, `[Word:${file.name}]`, result.value.trim()].filter(Boolean).join('\n\n')
+          );
+        } catch (error) {
+          console.error('Failed to parse Word document:', error);
         }
-        
-        // Resize if too large to keep performance
-        const maxDim = 2000;
-        let width = img.width;
-        let height = img.height;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) {
-            height = (height / width) * maxDim;
-            width = maxDim;
-          } else {
-            width = (width / height) * maxDim;
-            height = maxDim;
-          }
-        }
-        
-        canvas.width = width;
-        canvas.height = height;
-        ctx.drawImage(img, 0, 0, width, height);
-        
-        const imageData = ctx.getImageData(0, 0, width, height);
-        const data = imageData.data;
-        
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
-          
-          // Grayscale
-          const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-          
-          // Contrast enhancement (simple linear)
-          // Map [50, 200] to [0, 255]
-          let value = (gray - 50) * (255 / (200 - 50));
-          value = Math.max(0, Math.min(255, value));
-          
-          data[i] = data[i + 1] = data[i + 2] = value;
-        }
-        
-        ctx.putImageData(imageData, 0, 0);
-        resolve(canvas.toDataURL('image/jpeg', 0.8));
+        return;
+      }
+
+      let preview = await readAsDataUrl(file);
+      if (workflow === 'image_pro' && file.type.startsWith('image/') && imageOptions.enhanceImage) {
+        preview = await enhanceDocumentImage(preview);
+      }
+
+      const resourceId = uuidv4();
+      const resource: Resource = {
+        id: resourceId,
+        name: file.name,
+        type: file.type || 'unknown',
+        size: file.size,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        data: preview,
+        subject: state.currentSubject,
+        origin: 'input_upload',
+        retentionPolicy: 'auto',
+        expiresAt: getAutoExpireAt(state.settings.resourceAutoCleanupDays || 21),
+        tags: [workflow],
+        isFolder: false,
+        parentId: null,
       };
-      img.onerror = () => resolve(base64);
-      img.src = base64;
-    });
-  };
 
-  const handleImageUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement> | File | FileList | File[]) => {
-    let files: File[] = [];
-    if (e instanceof File) {
-      files = [e];
-    } else if (e instanceof FileList) {
-      files = Array.from(e);
-    } else if (Array.isArray(e)) {
-      files = e;
-    } else if (e && e.target && e.target.files) {
-      files = Array.from(e.target.files);
-    }
+      dispatch({ type: 'ADD_RESOURCE', payload: resource });
 
-    if (files.length > 0) {
-      const newImages: string[] = [];
-      const newResourceIds: string[] = [];
-      for (const file of files) {
-        if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.name.endsWith('.docx')) {
-          // Process Word document using mammoth
-          try {
-            const mammoth = await import('mammoth');
-            const arrayBuffer = await file.arrayBuffer();
-            const result = await mammoth.extractRawText({ arrayBuffer });
-            setInput(prev => prev + (prev ? '\n\n' : '') + `[Word文档内容: ${file.name}]\n` + result.value);
-          } catch (err) {
-            console.error('Failed to parse Word document:', err);
-          }
-          continue;
-        }
+      setDraftAssets((previous) => [
+        ...previous,
+        {
+          resourceId,
+          name: file.name,
+          preview,
+          type: file.type || 'unknown',
+          size: file.size,
+        },
+      ]);
+    },
+    [dispatch, imageOptions.enhanceImage, state.currentSubject, state.settings.resourceAutoCleanupDays, workflow]
+  );
 
-        const base64 = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.readAsDataURL(file);
-        });
-        
-        // Auto-archive to Resource Library
-        const resourceId = uuidv4();
-        dispatch({
-          type: 'ADD_RESOURCE',
-          payload: {
-            id: resourceId,
-            name: file.name,
-            type: file.type || 'unknown',
-            size: file.size,
-            createdAt: Date.now(),
-            data: base64,
-            subject: state.currentSubject,
-            isFolder: false,
-            parentId: null
-          }
-        });
-        newResourceIds.push(resourceId);
-
-        if (isScanMode && file.type.startsWith('image/')) {
-          const scanned = await processImageToScan(base64);
-          newImages.push(scanned);
-        } else {
-          newImages.push(base64);
-        }
+  const handleFiles = useCallback(
+    async (files: FileList | File[]) => {
+      const list = Array.from(files);
+      for (const file of list) {
+        await addAssetFromFile(file);
       }
-      if (newImages.length > 0) {
-        setImages(prev => [...prev, ...newImages]);
-      }
-      if (newResourceIds.length > 0) {
-        setDraftResourceIds(prev => [...prev, ...newResourceIds]);
-      }
-    }
-  }, [isScanMode, dispatch, state.currentSubject]);
+    },
+    [addAssetFromFile]
+  );
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = () => {
-    setIsDragging(false);
-  };
-
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    
-    const items = e.dataTransfer.items;
-    if (!items) return;
-
-    const files: File[] = [];
-    
-    const traverseFileTree = async (item: any, path: string = "") => {
-      if (item.isFile) {
-        const file = await new Promise<File>((resolve) => item.file(resolve));
-        files.push(file);
-      } else if (item.isDirectory) {
-        const dirReader = item.createReader();
-        const entries = await new Promise<any[]>((resolve) => dirReader.readEntries(resolve));
-        for (const entry of entries) {
-          await traverseFileTree(entry, path + item.name + "/");
-        }
-      }
-    };
-
-    const promises = [];
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i].webkitGetAsEntry();
-      if (item) {
-        promises.push(traverseFileTree(item));
-      }
-    }
-
-    await Promise.all(promises);
-    if (files.length > 0) {
-      handleImageUpload(files);
-    }
-  };
+  const handleInputFileChange = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      if (!event.target.files) return;
+      await handleFiles(event.target.files);
+      event.target.value = '';
+    },
+    [handleFiles]
+  );
 
   useEffect(() => {
-    const handlePaste = (e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      
-      let hasImage = false;
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.indexOf('image') !== -1) {
-          const file = items[i].getAsFile();
-          if (file) {
-            handleImageUpload(file);
-            hasImage = true;
-          }
-        }
+    const handlePaste = async (event: ClipboardEvent) => {
+      const items = Array.from(event.clipboardData?.items || []);
+      const files = items
+        .filter((item) => item.type.startsWith('image/'))
+        .map((item) => item.getAsFile())
+        .filter(Boolean) as File[];
+
+      if (files.length > 0) {
+        await handleFiles(files);
       }
-      
-      // If we handled an image and the target is not a textarea/input, prevent default
-      // Actually, if we handled an image, we might want to prevent default to avoid double pasting in some editors
-      // But since we use a standard textarea, letting it paste text is fine.
     };
 
     window.addEventListener('paste', handlePaste);
-    return () => {
-      window.removeEventListener('paste', handlePaste);
-    };
-  }, [isScanMode, handleImageUpload]);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [handleFiles]);
 
-  const handleSubmit = async (isRegenerate = false) => {
-    if (!input && images.length === 0 && !isRegenerate) return;
-    setLoading(true);
-    setSuccess(false);
-    setAnalysisProcess(null);
+  const runParse = useCallback(
+    async (regenerate: boolean) => {
+      if (!input.trim() && draftAssets.length === 0 && !regenerate) return;
 
-    try {
-      const promptInput = supplementaryInstruction 
-        ? `${input}\n\n用户补充说明/修改要求：${supplementaryInstruction}`
-        : input;
+      setLoading(true);
 
-      const fullPrompt = isFullExamMode 
-        ? `【整卷分析模式】请对上传的试卷和答题卡进行全面分析。请根据标记和答题情况，自动总结错题、薄弱知识点和记忆卡片。如果用户有追加要求，请结合要求分析。\n\n${promptInput}`
-        : promptInput;
+      const sessionId = pendingReview?.id || uuidv4();
+      const options = workflow === 'quick' ? {} : imageOptions;
+      const workflowInstruction = buildWorkflowInstruction(workflow, options, supplementaryInstruction);
+      const prompt = [workflowInstruction, input.trim()].filter(Boolean).join('\n\n');
+      const existingFunctionTypes = functionOptions.length > 0 ? functionOptions : DEFAULT_FUNCTIONS;
+      const existingPurposeTypes = purposeOptions.length > 0 ? purposeOptions : DEFAULT_PURPOSES;
+      const resourceIds = draftAssets.map((asset) => asset.resourceId);
 
-      const existingFunctionTypes = Array.from(new Set(state.memories.map(m => m.functionType)));
-      if (existingFunctionTypes.length === 0) existingFunctionTypes.push('细碎记忆', '方法论', '关联型记忆', '系统型');
-      
-      const existingPurposeTypes = Array.from(new Set(state.memories.map(m => m.purposeType)));
-      if (existingPurposeTypes.length === 0) existingPurposeTypes.push('内化型', '记忆型', '补充知识型', '系统型');
-
-      const { analysisProcess: aiAnalysis, parsedItems, newNodes, deletedNodeIds, identifiedSubject } = await parseNotes(
-        fullPrompt,
-        state.currentSubject,
-        state.knowledgeNodes,
-        { ...state.settings, parseModel: selectedModel },
-        images.length > 0 ? images : undefined,
-        explicitFunction !== 'auto' ? explicitFunction : undefined,
-        explicitPurpose !== 'auto' ? explicitPurpose : undefined,
-        isRegenerate && pendingReview ? pendingReview.parsedItems : undefined,
-        isRegenerate && pendingReview ? pendingReview.aiAnalysis : undefined,
-        existingFunctionTypes,
-        existingPurposeTypes,
-        (log) => {
-          if (state.settings.enableLogging) {
+      try {
+        const parsed = await parseNotes(
+          prompt,
+          state.currentSubject,
+          state.knowledgeNodes,
+          { ...state.settings, parseModel: selectedModel },
+          draftAssets.length > 0 ? draftAssets.map((asset) => asset.preview) : undefined,
+          explicitFunction !== 'auto' ? explicitFunction : undefined,
+          explicitPurpose !== 'auto' ? explicitPurpose : undefined,
+          regenerate ? pendingReview?.parsedItems : undefined,
+          regenerate ? pendingReview?.aiAnalysis : undefined,
+          existingFunctionTypes,
+          existingPurposeTypes,
+          (log) => {
             dispatch({
               type: 'ADD_LOG',
               payload: {
-                id: Math.random().toString(36).substr(2, 9),
-                timestamp: Date.now(),
-                ...log
-              }
+                ...log,
+                subject: state.currentSubject,
+                sessionId,
+                workflow,
+                resourceIds,
+                metadata: {
+                  regenerate,
+                  imageCount: draftAssets.length,
+                },
+              },
             });
           }
-        }
-      );
+        );
 
-      setPendingReview({
-        parsedItems,
-        newNodes,
-        deletedNodeIds,
-        aiAnalysis,
-        identifiedSubject
+        const historyItem: InputHistoryItem = {
+          id: sessionId,
+          timestamp: Date.now(),
+          subject: state.currentSubject,
+          workflow,
+          input,
+          images: draftAssets.map((asset) => asset.preview),
+          imageResourceIds: resourceIds,
+          supplementaryInstruction,
+          parsedItems: parsed.parsedItems,
+          newNodes: parsed.newNodes,
+          deletedNodeIds: parsed.deletedNodeIds,
+          aiAnalysis: parsed.analysisProcess,
+          identifiedSubject: parsed.identifiedSubject,
+          options,
+        };
+
+        dispatch({ type: 'ADD_INPUT_HISTORY', payload: historyItem });
+
+        if (regenerate) {
+          dispatch({
+            type: 'ADD_FEEDBACK_EVENT',
+            payload: createFeedbackEvent({
+              subject: state.currentSubject,
+              targetType: 'ingestion',
+              targetId: sessionId,
+              signalType: 'ingestion_regenerated',
+              sentiment: 'neutral',
+              note: supplementaryInstruction.trim() || undefined,
+              metadata: {
+                workflow,
+                imageCount: draftAssets.length,
+              },
+            }),
+          });
+        }
+
+        setPendingReview({
+          id: sessionId,
+          workflow,
+          parsedItems: parsed.parsedItems as ReviewItem[],
+          newNodes: parsed.newNodes,
+          deletedNodeIds: parsed.deletedNodeIds,
+          aiAnalysis: parsed.analysisProcess,
+          identifiedSubject: parsed.identifiedSubject,
+          options,
+        });
+      } catch (error: any) {
+        console.error('Failed to parse notes:', error);
+        alert(`解析失败：${error?.message || '未知错误'}`);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [
+      draftAssets,
+      explicitFunction,
+      explicitPurpose,
+      functionOptions,
+      imageOptions,
+      input,
+      pendingReview,
+      purposeOptions,
+      selectedModel,
+      state.currentSubject,
+      state.knowledgeNodes,
+      state.settings,
+      supplementaryInstruction,
+      workflow,
+      dispatch,
+    ]
+  );
+
+  const persistParsedItems = useCallback(
+    async (items: ReviewItem[], removeIndex?: number) => {
+      if (!pendingReview) return;
+
+      if (pendingReview.identifiedSubject !== state.currentSubject) {
+        dispatch({ type: 'SET_SUBJECT', payload: pendingReview.identifiedSubject });
+      }
+
+      if (pendingReview.newNodes.length > 0) {
+        dispatch({ type: 'BATCH_ADD_NODES', payload: pendingReview.newNodes });
+      }
+
+      if (pendingReview.deletedNodeIds.length > 0) {
+        dispatch({ type: 'BATCH_DELETE_NODES', payload: pendingReview.deletedNodeIds });
+      }
+
+      const memoryIds: string[] = [];
+      const primaryPreview = pickPrimaryPreview(draftAssets);
+      const now = Date.now();
+
+      const memories = items
+        .map((item) => {
+          const memoryId = uuidv4();
+          const memoryResult = createMemoryPayload({
+            id: memoryId,
+            subject: pendingReview.identifiedSubject,
+            content: item.content,
+            correctAnswer: item.correctAnswer,
+            questionType: item.questionType,
+            source: item.source,
+            region: item.region,
+            notes: item.notes,
+            functionType: explicitFunction !== 'auto' ? explicitFunction : item.functionType || DEFAULT_FUNCTIONS[0],
+            purposeType: explicitPurpose !== 'auto' ? explicitPurpose : item.purposeType || DEFAULT_PURPOSES[0],
+            knowledgeNodeIds: item.nodeIds || [],
+            confidence: 50,
+            mastery: 0,
+            createdAt: now,
+            updatedAt: now,
+            sourceType: draftAssets.length > 0 ? 'image' : 'text',
+            imageUrl: primaryPreview,
+            imageUrls: draftAssets.map((asset) => asset.resourceId),
+            sourceResourceIds: draftAssets.map((asset) => asset.resourceId),
+            isMistake: item.isMistake || markAsMistake,
+            wrongAnswer: item.wrongAnswer,
+            errorReason: item.errorReason,
+            visualDescription: item.visualDescription,
+            analysisProcess: pendingReview.aiAnalysis,
+            fsrs: getInitialFSRSData(),
+            type: item.type,
+            vocabularyData: item.vocabularyData,
+            dataSource: 'ai_parse',
+            ingestionMode: pendingReview.workflow,
+            ingestionSessionId: pendingReview.id,
+          });
+
+          if (!memoryResult.ok) return null;
+
+          memoryIds.push(memoryId);
+          return memoryResult.value;
+        })
+        .filter(Boolean);
+
+      if (memories.length > 0) {
+        dispatch({
+          type: memories.length === 1 ? 'ADD_MEMORY' : 'BATCH_ADD_MEMORIES',
+          payload: memories.length === 1 ? memories[0] : memories,
+        } as any);
+      }
+
+      dispatch({
+        type: 'ADD_FEEDBACK_EVENT',
+        payload: createFeedbackEvent({
+          subject: pendingReview.identifiedSubject,
+          targetType: 'ingestion',
+          targetId: pendingReview.id,
+          signalType: 'workflow_used',
+          sentiment: 'positive',
+          metadata: {
+            workflow: pendingReview.workflow,
+            memoryCount: memories.length,
+            imageCount: draftAssets.length,
+          },
+        }),
       });
 
-      // Save to history
-      const historyItem: InputHistoryItem = {
-        id: uuidv4(),
-        timestamp: Date.now(),
-        subject: state.currentSubject,
-        input,
-        images: [...images],
-        parsedItems,
-        newNodes,
-        deletedNodeIds,
-        aiAnalysis,
-        identifiedSubject
-      };
-      dispatch({ type: 'ADD_INPUT_HISTORY', payload: historyItem });
+      if (draftAssets.length > 0 && memories.length > 0) {
+        draftAssets.forEach((asset) => {
+          const resource = state.resources.find((item) => item.id === asset.resourceId);
+          if (!resource) return;
 
-      setAnalysisProcess(aiAnalysis);
-    } catch (error: any) {
-      console.error('Failed to parse notes:', error);
-      if (error.message?.includes('AI client not initialized')) {
-        alert('AI 客户端未初始化。请检查设置中的 API Key 是否正确配置。');
-      } else {
-        alert('解析失败，请检查网络或 AI 配置：' + (error.message || '未知错误'));
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleConfirmSave = async () => {
-    if (!pendingReview) return;
-
-    if (pendingReview.identifiedSubject !== state.currentSubject) {
-      dispatch({ type: 'SET_SUBJECT', payload: pendingReview.identifiedSubject });
-    }
-
-    if (pendingReview.newNodes.length > 0) {
-      dispatch({ type: 'BATCH_ADD_NODES', payload: pendingReview.newNodes });
-    }
-
-    if (pendingReview.deletedNodeIds && pendingReview.deletedNodeIds.length > 0) {
-      dispatch({ type: 'BATCH_DELETE_NODES', payload: pendingReview.deletedNodeIds });
-    }
-    
-    if (pendingReview.parsedItems.length > 0) {
-      const memories = await Promise.all(pendingReview.parsedItems.map(async item => {
-        const memoryId = uuidv4();
-        
-        // Save images to IndexedDB if exist
-        if (images.length > 0) {
-          try {
-            await Promise.all(images.map((img, idx) => saveImage(`${memoryId}_${idx}`, img)));
-          } catch (e) {
-            console.error('Failed to save images to IndexedDB:', e);
-          }
-        }
-
-        const memoryResult = createMemoryPayload({
-          id: memoryId,
-          subject: pendingReview.identifiedSubject,
-          content: item.content,
-          correctAnswer: item.correctAnswer,
-          questionType: item.questionType,
-          source: item.source,
-          region: item.region,
-          functionType: (explicitFunction !== 'auto' ? explicitFunction : item.functionType) as any,
-          purposeType: (explicitPurpose !== 'auto' ? explicitPurpose : item.purposeType) as any,
-          knowledgeNodeIds: item.nodeIds || (item.nodeId ? [item.nodeId] : []),
-          confidence: 50,
-          createdAt: Date.now(),
-          notes: item.notes,
-          sourceType: images.length > 0 ? 'image' : 'text' as any,
-          imageUrl: images[0] || undefined, // Primary image
-          imageUrls: images.length > 0 ? images.map((_, idx) => `${memoryId}_${idx}`) : undefined,
-          sourceResourceIds: draftResourceIds,
-          isMistake: item.isMistake || isMistake,
-          wrongAnswer: item.wrongAnswer,
-          errorReason: item.errorReason,
-          visualDescription: item.visualDescription,
-          analysisProcess: pendingReview.aiAnalysis,
-          fsrs: getInitialFSRSData(),
-          mastery: 0.01,
-          dataSource: 'ai_parse'
+          dispatch({
+            type: 'UPDATE_RESOURCE',
+            payload: {
+              ...resource,
+              description: `Linked to ${memories.length} memory item(s)`,
+              tags: Array.from(new Set([...(resource.tags || []), 'evidence', pendingReview.workflow])),
+            },
+          });
         });
-
-        if (!memoryResult.ok) {
-          throw new Error(memoryResult.error);
-        }
-
-        return memoryResult.value;
-      }));
-      dispatch({ type: 'BATCH_ADD_MEMORIES', payload: memories });
-    }
-    
-    setSuccess(true);
-    setInput('');
-    setImages([]);
-    setDraftResourceIds([]);
-    dispatch({ type: 'UPDATE_DRAFT', payload: { draftInput: '', draftImages: [] } });
-    setIsMistake(false);
-    setSupplementaryInstruction('');
-    setPendingReview(null);
-    setTimeout(() => setSuccess(false), 3000);
-  };
-
-  const handleSaveSingleItem = async (index: number) => {
-    if (!pendingReview) return;
-    const item = pendingReview.parsedItems[index];
-    
-    if (pendingReview.identifiedSubject !== state.currentSubject) {
-      dispatch({ type: 'SET_SUBJECT', payload: pendingReview.identifiedSubject });
-    }
-
-    if (pendingReview.newNodes.length > 0) {
-      dispatch({ type: 'BATCH_ADD_NODES', payload: pendingReview.newNodes });
-    }
-
-    if (pendingReview.deletedNodeIds && pendingReview.deletedNodeIds.length > 0) {
-      dispatch({ type: 'BATCH_DELETE_NODES', payload: pendingReview.deletedNodeIds });
-    }
-
-    const memoryId = uuidv4();
-    if (images.length > 0) {
-      try {
-        await Promise.all(images.map((img, idx) => saveImage(`${memoryId}_${idx}`, img)));
-      } catch (e) {
-        console.error('Failed to save images to IndexedDB:', e);
       }
-    }
 
-    const memoryResult = createMemoryPayload({
-      id: memoryId,
-      subject: pendingReview.identifiedSubject,
-      content: item.content,
-      correctAnswer: item.correctAnswer,
-      questionType: item.questionType,
-      source: item.source,
-      region: item.region,
-      functionType: (explicitFunction !== 'auto' ? explicitFunction : item.functionType) as any,
-      purposeType: (explicitPurpose !== 'auto' ? explicitPurpose : item.purposeType) as any,
-      knowledgeNodeIds: item.nodeIds || (item.nodeId ? [item.nodeId] : []),
-      confidence: 50,
-      createdAt: Date.now(),
-      notes: item.notes,
-      sourceType: images.length > 0 ? 'image' : 'text' as any,
-      imageUrl: images[0] || undefined,
-      imageUrls: images.length > 0 ? images.map((_, idx) => `${memoryId}_${idx}`) : undefined,
-      sourceResourceIds: draftResourceIds,
-      isMistake: item.isMistake || isMistake,
-      wrongAnswer: item.wrongAnswer,
-      errorReason: item.errorReason,
-      visualDescription: item.visualDescription,
-      analysisProcess: pendingReview.aiAnalysis,
-      fsrs: getInitialFSRSData(),
-      mastery: 0.01,
-      dataSource: 'ai_parse'
-    });
+      if (typeof removeIndex === 'number' && pendingReview.parsedItems.length > 1) {
+        setPendingReview({
+          ...pendingReview,
+          parsedItems: pendingReview.parsedItems.filter((_, index) => index !== removeIndex),
+        });
+        return;
+      }
 
-    if (!memoryResult.ok) {
-      alert(`保存失败: ${memoryResult.error}`);
-      return;
-    }
-
-    dispatch({ type: 'ADD_MEMORY', payload: memoryResult.value });
-    
-    // Remove from pending
-    const newItems = pendingReview.parsedItems.filter((_, i) => i !== index);
-    if (newItems.length === 0) {
       setPendingReview(null);
-      setImages([]);
-      setDraftResourceIds([]);
       setInput('');
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
-    } else {
-      setPendingReview({ ...pendingReview, parsedItems: newItems });
-    }
-  };
+      setSupplementaryInstruction('');
+      setDraftAssets([]);
+      setMarkAsMistake(false);
+      dispatch({ type: 'UPDATE_DRAFT', payload: { draftInput: '', draftImages: [] } });
+    },
+    [
+      dispatch,
+      draftAssets,
+      explicitFunction,
+      explicitPurpose,
+      markAsMistake,
+      pendingReview,
+      state.currentSubject,
+      state.resources,
+    ]
+  );
 
-  const handleCancelReview = () => {
-    setPendingReview(null);
-    setSupplementaryInstruction('');
-    setInput('');
-    setImages([]);
-    setDraftResourceIds([]);
-  };
+  const removeDraftAsset = useCallback((resourceId: string) => {
+    setDraftAssets((previous) => previous.filter((asset) => asset.resourceId !== resourceId));
+  }, []);
+
+  const handleDrop = useCallback(
+    async (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      setIsDragging(false);
+      if (event.dataTransfer.files.length > 0) {
+        await handleFiles(event.dataTransfer.files);
+      }
+    },
+    [handleFiles]
+  );
+
+  const restoreHistoryItem = useCallback((item: InputHistoryItem) => {
+    setWorkflow(item.workflow);
+    setInput(item.input);
+    setSupplementaryInstruction(item.supplementaryInstruction || '');
+    setDraftAssets(
+      (item.images || []).map((image, index) => ({
+        resourceId: item.imageResourceIds?.[index] || uuidv4(),
+        name: `Restored-${index + 1}`,
+        preview: image,
+        type: image.startsWith('data:image') ? 'image/*' : 'application/octet-stream',
+        size: 0,
+      }))
+    );
+    setPendingReview({
+      id: item.id,
+      workflow: item.workflow,
+      parsedItems: item.parsedItems as ReviewItem[],
+      newNodes: item.newNodes,
+      deletedNodeIds: item.deletedNodeIds,
+      aiAnalysis: item.aiAnalysis,
+      identifiedSubject: item.identifiedSubject,
+      options: item.options || {},
+    });
+    setShowHistory(false);
+  }, []);
+
+  const activeMeta = WORKFLOW_META[workflow];
 
   if (loading) {
     return (
-      <div className="max-w-5xl mx-auto p-6 space-y-6">
-        <div className="bg-slate-900 rounded-2xl shadow-sm border border-slate-800 p-8 flex flex-col items-center justify-center min-h-[400px] text-center">
+      <div className="max-w-6xl mx-auto p-6">
+        <div className="min-h-[420px] rounded-3xl border border-slate-800 bg-slate-950 flex flex-col items-center justify-center text-center p-8">
           <div className="relative mb-8">
-            <div className="w-20 h-20 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin"></div>
-            <BrainCircuit className="w-10 h-10 text-indigo-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 animate-pulse" />
+            <div className="h-20 w-20 rounded-full border-4 border-indigo-500/20 border-t-indigo-500 animate-spin" />
+            <BrainCircuit className="absolute left-1/2 top-1/2 h-9 w-9 -translate-x-1/2 -translate-y-1/2 text-indigo-400" />
           </div>
-          <h2 className="text-2xl font-bold text-slate-100 mb-3 tracking-tight">AI 正在深度思考中...</h2>
-          <p className="text-slate-400 max-w-md leading-relaxed mb-8">
-            我正在扫描你的笔记与图片，识别手写标记，并尝试将其与你的知识图谱建立深层联系。
+          <h2 className="text-2xl font-bold text-white mb-3">AI 正在处理录入材料</h2>
+          <p className="max-w-2xl text-sm text-slate-400 leading-7">
+            当前工作流为
+            <span className="text-slate-200 font-medium mx-1">{activeMeta.label}</span>
+            ，我会结合图片、文本、批注和你的补充要求生成更准确的入库结果。
           </p>
-          
-          {analysisProcess && (
-            <div className="w-full max-w-2xl p-4 bg-slate-950 rounded-xl border border-slate-800 text-left">
-              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></div>
-                实时思考过程
-              </div>
-              <p className="text-sm text-slate-300 font-mono leading-relaxed whitespace-pre-wrap">
-                {analysisProcess}
-                <span className="inline-block w-2 h-4 ml-1 bg-indigo-500 animate-pulse"></span>
-              </p>
-            </div>
-          )}
-
-          {!analysisProcess && (
-            <div className="flex gap-2">
-              <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-              <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-              <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce"></div>
-            </div>
-          )}
         </div>
-      </div>
-    );
-  }
-
-  if (pendingReview) {
-    return (
-      <div className="max-w-5xl mx-auto p-6 space-y-6 text-slate-200">
-        <div className="bg-slate-900 rounded-2xl shadow-sm border border-slate-800 p-6">
-          <h2 className="text-xl font-semibold text-slate-100 mb-4 flex items-center gap-2">
-            <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-            AI 解析完成，请审阅
-          </h2>
-          
-          <div className="space-y-4 mb-6">
-            <h3 className="text-sm font-medium text-slate-300">解析出的记忆点 ({pendingReview.parsedItems.length})</h3>
-            {pendingReview.parsedItems.map((item, index) => {
-              const isCollapsed = collapsedItems.has(index);
-              return (
-              <div key={index} className="bg-slate-800/50 border border-slate-700 rounded-xl overflow-hidden">
-                <div className="flex items-center justify-between p-3 bg-slate-800 border-b border-slate-700">
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        const newCollapsed = new Set(collapsedItems);
-                        if (isCollapsed) newCollapsed.delete(index);
-                        else newCollapsed.add(index);
-                        setCollapsedItems(newCollapsed);
-                      }}
-                      className="p-1 hover:bg-slate-700 rounded text-slate-400"
-                    >
-                      {isCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
-                    </button>
-                    <span className="text-sm font-medium text-slate-200">
-                      记忆点 {index + 1} {item.isMistake ? '(错题)' : ''}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleSaveSingleItem(index)}
-                      className="px-2 py-1 bg-emerald-500/20 text-emerald-300 rounded text-xs font-medium hover:bg-emerald-500/30 transition-colors border border-emerald-500/30"
-                    >
-                      保存此条
-                    </button>
-                    <button
-                      onClick={() => {
-                        const newItems = pendingReview.parsedItems.filter((_, i) => i !== index);
-                        setPendingReview({ ...pendingReview, parsedItems: newItems });
-                      }}
-                      className="p-1 hover:bg-red-500/20 text-red-400 rounded transition-colors"
-                      title="删除此记忆点"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-                
-                {!isCollapsed && (
-                <div className="p-4 space-y-3">
-                  <textarea
-                    value={item.content}
-                    onChange={(e) => {
-                      const newItems = [...pendingReview.parsedItems];
-                      newItems[index].content = e.target.value;
-                      setPendingReview({ ...pendingReview, parsedItems: newItems });
-                    }}
-                    className="w-full p-2 text-sm border border-slate-700 bg-slate-800 text-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none resize-y"
-                    rows={3}
-                  />
-                  {item.notes && (
-                    <textarea
-                      value={item.notes}
-                      onChange={(e) => {
-                        const newItems = [...pendingReview.parsedItems];
-                        newItems[index].notes = e.target.value;
-                        setPendingReview({ ...pendingReview, parsedItems: newItems });
-                      }}
-                      className="w-full p-2 text-sm border border-slate-700 bg-slate-800 text-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none resize-y"
-                      rows={2}
-                      placeholder="补充说明"
-                    />
-                  )}
-                  {(item.type === 'qa' || item.isMistake || isMistake) && (
-                    <div className="space-y-3">
-                      {item.visualDescription && (
-                        <textarea
-                          value={item.visualDescription || ''}
-                          onChange={(e) => {
-                            const newItems = [...pendingReview.parsedItems];
-                            newItems[index].visualDescription = e.target.value;
-                            setPendingReview({ ...pendingReview, parsedItems: newItems });
-                          }}
-                          className="w-full p-2 text-sm border border-slate-700 bg-slate-800 text-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none resize-y"
-                          rows={2}
-                          placeholder="图片视觉描述 (如：包含一个抛物线 y=x^2 和一条直线...)"
-                        />
-                      )}
-                      {item.correctAnswer && (
-                        <div className="space-y-1">
-                          <div className="text-[10px] font-bold text-emerald-500/70 uppercase tracking-widest ml-1">标准答案</div>
-                          <textarea
-                            value={item.correctAnswer || ''}
-                            onChange={(e) => {
-                              const newItems = [...pendingReview.parsedItems];
-                              newItems[index].correctAnswer = e.target.value;
-                              setPendingReview({ ...pendingReview, parsedItems: newItems });
-                            }}
-                            className="w-full p-2 text-sm border border-emerald-900/50 bg-emerald-900/20 text-emerald-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none resize-y"
-                            rows={2}
-                            placeholder="标准答案 (AI提取或手动输入)"
-                          />
-                        </div>
-                      )}
-                      {(item.wrongAnswer || item.errorReason || item.isMistake || isMistake) && (
-                        <div className="p-3 bg-red-900/10 border border-red-900/30 rounded-lg space-y-3">
-                          <div className="text-xs font-bold text-red-400 uppercase tracking-widest flex items-center justify-between">
-                            <span>错解与分析</span>
-                            {!item.wrongAnswer && !item.errorReason && <span className="text-[10px] font-normal normal-case opacity-50">(点击下方输入)</span>}
-                          </div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            <div className="space-y-1">
-                              <div className="text-[10px] font-bold text-red-400/70 uppercase tracking-widest ml-1">错误答案</div>
-                              <textarea
-                                value={item.wrongAnswer || ''}
-                                onChange={(e) => {
-                                  const newItems = [...pendingReview.parsedItems];
-                                  newItems[index].wrongAnswer = e.target.value;
-                                  setPendingReview({ ...pendingReview, parsedItems: newItems });
-                                }}
-                                className="w-full p-2 text-sm border border-red-900/50 bg-red-900/20 text-red-200 rounded-lg focus:ring-2 focus:ring-red-500 outline-none resize-y"
-                                rows={2}
-                                placeholder="你的错误答案"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <div className="text-[10px] font-bold text-orange-400/70 uppercase tracking-widest ml-1">原因分析</div>
-                              <textarea
-                                value={item.errorReason || ''}
-                                onChange={(e) => {
-                                  const newItems = [...pendingReview.parsedItems];
-                                  newItems[index].errorReason = e.target.value;
-                                  setPendingReview({ ...pendingReview, parsedItems: newItems });
-                                }}
-                                className="w-full p-2 text-sm border border-orange-900/50 bg-orange-900/20 text-orange-200 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none resize-y"
-                                rows={2}
-                                placeholder="错误原因分析"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  
-                  {item.type === 'vocabulary' && item.vocabularyData && (
-                    <div className="space-y-3 p-4 bg-teal-900/10 border border-teal-900/30 rounded-xl text-sm">
-                      <div className="text-xs font-bold text-teal-400 uppercase tracking-widest mb-1">词汇解析 (Vocabulary)</div>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="space-y-3">
-                          <div className="flex flex-col gap-1">
-                            <span className="text-[10px] font-bold text-teal-500/70 uppercase tracking-widest ml-1">含义 (Meaning)</span>
-                            <input
-                              type="text"
-                              value={item.vocabularyData.meaning || ''}
-                              onChange={(e) => {
-                                const newItems = [...pendingReview.parsedItems];
-                                newItems[index].vocabularyData.meaning = e.target.value;
-                                setPendingReview({ ...pendingReview, parsedItems: newItems });
-                              }}
-                              className="w-full px-3 py-2 bg-teal-950/50 border border-teal-900/50 rounded-lg text-teal-100 focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all"
-                              placeholder="单词含义"
-                            />
-                          </div>
-                          
-                          <div className="flex flex-col gap-1">
-                            <span className="text-[10px] font-bold text-teal-500/70 uppercase tracking-widest ml-1">语境 (Context)</span>
-                            <textarea
-                              value={item.vocabularyData.context || ''}
-                              onChange={(e) => {
-                                const newItems = [...pendingReview.parsedItems];
-                                newItems[index].vocabularyData.context = e.target.value;
-                                setPendingReview({ ...pendingReview, parsedItems: newItems });
-                              }}
-                              className="w-full px-3 py-2 bg-teal-950/50 border border-teal-900/50 rounded-lg text-teal-100 italic focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all resize-y"
-                              rows={2}
-                              placeholder="原文例句"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="space-y-3">
-                          <div className="flex flex-col gap-1">
-                            <span className="text-[10px] font-bold text-teal-500/70 uppercase tracking-widest ml-1">用法 (Usage)</span>
-                            <textarea
-                              value={item.vocabularyData.usage || ''}
-                              onChange={(e) => {
-                                const newItems = [...pendingReview.parsedItems];
-                                newItems[index].vocabularyData.usage = e.target.value;
-                                setPendingReview({ ...pendingReview, parsedItems: newItems });
-                              }}
-                              className="w-full px-3 py-2 bg-teal-950/50 border border-teal-900/50 rounded-lg text-teal-100 focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all resize-y"
-                              rows={2}
-                              placeholder="搭配、短语等"
-                            />
-                          </div>
-                          
-                          <div className="flex flex-col gap-1">
-                            <span className="text-[10px] font-bold text-teal-500/70 uppercase tracking-widest ml-1">助记 & 同义词</span>
-                            <div className="space-y-2">
-                              <input
-                                type="text"
-                                value={item.vocabularyData.mnemonics || ''}
-                                onChange={(e) => {
-                                  const newItems = [...pendingReview.parsedItems];
-                                  newItems[index].vocabularyData.mnemonics = e.target.value;
-                                  setPendingReview({ ...pendingReview, parsedItems: newItems });
-                                }}
-                                className="w-full px-3 py-2 bg-teal-950/50 border border-teal-900/50 rounded-lg text-teal-100 focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all"
-                                placeholder="助记方法"
-                              />
-                              <input
-                                type="text"
-                                value={item.vocabularyData.synonyms?.join(', ') || ''}
-                                onChange={(e) => {
-                                  const newItems = [...pendingReview.parsedItems];
-                                  newItems[index].vocabularyData.synonyms = e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean);
-                                  setPendingReview({ ...pendingReview, parsedItems: newItems });
-                                }}
-                                placeholder="同义词 (逗号分隔)"
-                                className="w-full px-3 py-2 bg-teal-950/50 border border-teal-900/50 rounded-lg text-teal-100 focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-4 text-xs flex-wrap">
-                    <label className="flex items-center gap-1 cursor-pointer text-slate-300">
-                      <input
-                        type="checkbox"
-                        checked={item.isMistake || isMistake}
-                        onChange={(e) => {
-                          const newItems = [...pendingReview.parsedItems];
-                          newItems[index].isMistake = e.target.checked;
-                          setPendingReview({ ...pendingReview, parsedItems: newItems });
-                        }}
-                        className="rounded border-slate-700 bg-slate-800 text-indigo-500 focus:ring-indigo-500"
-                      />
-                      标记为错题
-                    </label>
-                    <span className="px-2 py-1 bg-indigo-500/20 text-indigo-300 rounded-md border border-indigo-500/30">
-                      关联标签: {(item.nodeIds || (item.nodeId ? [item.nodeId] : [])).map((id: string) => state.knowledgeNodes.find(n => n.id === id)?.name || '新标签').join(', ')}
-                    </span>
-                    <select
-                      value={item.questionType || ''}
-                      onChange={(e) => {
-                        const newItems = [...pendingReview.parsedItems];
-                        newItems[index].questionType = e.target.value;
-                        setPendingReview({ ...pendingReview, parsedItems: newItems });
-                      }}
-                      className="px-2 py-1 border border-slate-700 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-800 text-slate-200"
-                    >
-                      <option value="">选择题型...</option>
-                      <option value="multiple-choice">选择题</option>
-                      <option value="fill-in-the-blank">填空题</option>
-                      <option value="essay">解答题</option>
-                    </select>
-                    <input
-                      type="text"
-                      value={item.collectionName || ''}
-                      onChange={(e) => {
-                        const newItems = [...pendingReview.parsedItems];
-                        newItems[index].collectionName = e.target.value;
-                        setPendingReview({ ...pendingReview, parsedItems: newItems });
-                      }}
-                      placeholder="归档本 (如: 词汇本)"
-                      className="px-2 py-1 border border-slate-700 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none w-32 bg-slate-800 text-slate-200"
-                    />
-                    <input
-                      type="text"
-                      value={item.source || ''}
-                      onChange={(e) => {
-                        const newItems = [...pendingReview.parsedItems];
-                        newItems[index].source = e.target.value;
-                        setPendingReview({ ...pendingReview, parsedItems: newItems });
-                      }}
-                      placeholder="题目来源 (如: 期中考试)"
-                      className="px-2 py-1 border border-slate-700 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none w-32 bg-slate-800 text-slate-200"
-                    />
-                    <input
-                      type="text"
-                      value={item.region || ''}
-                      onChange={(e) => {
-                        const newItems = [...pendingReview.parsedItems];
-                        newItems[index].region = e.target.value;
-                        setPendingReview({ ...pendingReview, parsedItems: newItems });
-                      }}
-                      placeholder="区域/试卷 (如: 北京)"
-                      className="px-2 py-1 border border-slate-700 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none w-32 bg-slate-800 text-slate-200"
-                    />
-                    <select
-                      value={item.functionType}
-                      onChange={(e) => {
-                        const newItems = [...pendingReview.parsedItems];
-                        newItems[index].functionType = e.target.value;
-                        setPendingReview({ ...pendingReview, parsedItems: newItems });
-                      }}
-                      className="px-2 py-1 border border-slate-700 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-800 text-slate-200"
-                    >
-                      {['细碎记忆', '方法论', '关联型记忆', '系统型', ...Array.from(new Set(state.memories.map(m => m.functionType))).filter(t => t && !['细碎记忆', '方法论', '关联型记忆', '系统型'].includes(t))].map(t => (
-                        <option key={t} value={t}>{t}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={item.purposeType}
-                      onChange={(e) => {
-                        const newItems = [...pendingReview.parsedItems];
-                        newItems[index].purposeType = e.target.value;
-                        setPendingReview({ ...pendingReview, parsedItems: newItems });
-                      }}
-                      className="px-2 py-1 border border-slate-700 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-800 text-slate-200"
-                    >
-                      {['内化型', '记忆型', '补充知识型', '系统型', ...Array.from(new Set(state.memories.map(m => m.purposeType))).filter(t => t && !['内化型', '记忆型', '补充知识型', '系统型'].includes(t))].map(t => (
-                        <option key={t} value={t}>{t}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                )}
-              </div>
-            )})}
-          </div>
-
-          {(pendingReview.newNodes.length > 0 || (pendingReview.deletedNodeIds && pendingReview.deletedNodeIds.length > 0)) && (
-            <div className="space-y-4 mb-6">
-              <h3 className="text-sm font-medium text-slate-300 flex items-center gap-2">
-                <Info className="w-4 h-4 text-indigo-400" />
-                知识图谱调整预览
-              </h3>
-              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 space-y-3">
-                {pendingReview.newNodes.length > 0 && (
-                  <div>
-                    <p className="text-xs font-semibold text-emerald-400 mb-2 uppercase tracking-wider">新增节点</p>
-                    <ul className="space-y-1">
-                      {pendingReview.newNodes.map((node, idx) => (
-                        <li key={`${node.id}-${idx}`} className="text-sm text-emerald-300 flex flex-col gap-1">
-                          <div className="flex items-center gap-2">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                            {node.name} <span className="text-emerald-500/70 text-xs">(父节点: {state.knowledgeNodes.find(n => n.id === node.parentId)?.name || node.parentId || '根节点'})</span>
-                          </div>
-                          {node.testingMethods && node.testingMethods.length > 0 && (
-                            <div className="pl-3.5 text-xs text-emerald-400/80">
-                              <span className="font-medium">考法:</span> {node.testingMethods.join('、')}
-                            </div>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {pendingReview.deletedNodeIds && pendingReview.deletedNodeIds.length > 0 && (
-                  <div>
-                    <p className="text-xs font-semibold text-red-400 mb-2 uppercase tracking-wider">建议删除节点</p>
-                    <ul className="space-y-1">
-                      {pendingReview.deletedNodeIds.map((id, idx) => {
-                        const node = state.knowledgeNodes.find(n => n.id === id);
-                        return (
-                          <li key={`delete-${id}-${idx}`} className="text-sm text-red-300 flex items-center gap-2 line-through">
-                            <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
-                            {node?.name || id}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div className="space-y-4 mb-6">
-            <h3 className="text-sm font-medium text-slate-300">补充说明 (让 AI 重新生成)</h3>
-            <textarea
-              value={supplementaryInstruction}
-              onChange={(e) => setSupplementaryInstruction(e.target.value)}
-              placeholder="如果 AI 解析不准确，请在此输入补充说明，例如：'请把第一点和第二点合并'，然后点击重新生成。"
-              className="w-full p-3 text-sm border border-slate-700 bg-slate-800 text-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none resize-y"
-              rows={3}
-            />
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => handleSubmit(true)}
-              disabled={loading}
-              className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-xl font-medium transition-colors flex items-center justify-center gap-2"
-            >
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-              重新生成
-            </button>
-            <button
-              onClick={handleConfirmSave}
-              className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium transition-colors"
-            >
-              确认并保存
-            </button>
-            <button
-              onClick={handleCancelReview}
-              className="px-4 py-2.5 bg-transparent border border-slate-700 hover:bg-slate-800 text-slate-400 rounded-xl font-medium transition-colors"
-            >
-              取消
-            </button>
-          </div>
-        </div>
-
-        {analysisProcess && (
-          <div className="bg-slate-900 rounded-2xl shadow-sm border border-slate-800 p-6">
-            <h3 className="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-2">
-              <Info className="w-4 h-4 text-indigo-400" />
-              AI 分析过程与意图识别
-            </h3>
-            <div className="p-4 bg-slate-800/50 border border-slate-700 rounded-xl text-sm text-slate-300 whitespace-pre-wrap leading-relaxed prose prose-sm prose-invert max-w-none">
-              <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{analysisProcess}</Markdown>
-            </div>
-          </div>
-        )}
       </div>
     );
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-3 space-y-3 text-slate-200">
-      <div className="bg-slate-900 rounded-lg shadow-sm border border-slate-800 p-3">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-base font-semibold text-slate-100 flex items-center gap-2">
-            <FileText className="w-3.5 h-3.5 text-indigo-400" />
-            录入 {state.currentSubject} 记忆/错题
-          </h2>
+    <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6 text-slate-200">
+      <div className="rounded-3xl border border-slate-800 bg-slate-950 p-4 md:p-6 shadow-2xl">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-xs uppercase tracking-[0.25em] text-slate-500 mb-2">
+              <BrainCircuit className="h-4 w-4 text-indigo-400" />
+              Ingestion Workbench
+            </div>
+            <h2 className="text-2xl font-black tracking-tight text-white">{state.currentSubject} 专业录入工作台</h2>
+            <p className="mt-2 text-sm text-slate-400 leading-7 max-w-3xl">
+              统一管理常规快速录入、图片专业处理和整卷分析；上传图片默认进入资源库，并按规则自动清理旧文件。
+            </p>
+          </div>
+
           <button
-            onClick={() => setShowHistory(!showHistory)}
+            onClick={() => setShowHistory((previous) => !previous)}
             className={clsx(
-              "flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-widest transition-colors",
-              showHistory ? "bg-indigo-500 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+              'inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold uppercase tracking-widest transition-colors',
+              showHistory
+                ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-200'
+                : 'border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700 hover:text-slate-200'
             )}
           >
-            <History className="w-3 h-3" />
-            历史记录
+            <History className="h-4 w-4" />
+            录入历史
           </button>
         </div>
 
-        {showHistory && (
-          <div className="mb-4 bg-slate-950 border border-slate-800 rounded-xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
-            <div className="p-3 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">最近录入历史 ({state.currentSubject})</span>
-              <button onClick={() => setShowHistory(false)} className="text-slate-500 hover:text-white">
-                <X className="w-3 h-3" />
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          {(Object.keys(WORKFLOW_META) as IngestionMode[]).map((mode) => {
+            const meta = WORKFLOW_META[mode];
+            const Icon = meta.icon;
+
+            return (
+              <button
+                key={mode}
+                onClick={() => setWorkflow(mode)}
+                className={clsx('rounded-2xl border p-4 text-left transition-all', modeBadgeClass(mode, workflow === mode))}
+              >
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-black/20">
+                    <Icon className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-white">{meta.label}</div>
+                    <div className="text-xs text-slate-400 mt-1">{meta.subtitle}</div>
+                  </div>
+                </div>
+                <p className="text-xs leading-6 text-slate-400">{meta.hint}</p>
               </button>
+            );
+          })}
+        </div>
+
+        {showHistory && (
+          <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/60">
+            <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+              <div className="text-xs uppercase tracking-widest text-slate-500">最近录入历史</div>
+              <div className="text-xs text-slate-500">{filteredHistory.length} 条</div>
             </div>
-            <div className="max-h-60 overflow-y-auto divide-y divide-slate-800">
-              {state.inputHistory
-                .filter(h => h.subject === state.currentSubject)
-                .map(item => (
-                  <div key={item.id} className="p-3 hover:bg-slate-900 transition-colors group">
-                    <div className="flex items-start justify-between gap-3">
-                      <div 
-                        className="flex-1 cursor-pointer"
-                        onClick={() => {
-                          setPendingReview({
-                            parsedItems: item.parsedItems,
-                            newNodes: item.newNodes,
-                            deletedNodeIds: item.deletedNodeIds,
-                            aiAnalysis: item.aiAnalysis,
-                            identifiedSubject: item.identifiedSubject
-                          });
-                          setInput(item.input);
-                          setImages(item.images);
-                          setShowHistory(false);
-                        }}
-                      >
-                        <p className="text-xs text-slate-300 line-clamp-1 mb-1">{item.input || (item.images.length > 0 ? `[图片录入: ${item.images.length}张]` : '无文字内容')}</p>
-                        <span className="text-[9px] text-slate-600 font-medium">{new Date(item.timestamp).toLocaleString()}</span>
+            <div className="max-h-72 overflow-y-auto">
+              {filteredHistory.length === 0 ? (
+                <div className="p-6 text-sm text-slate-500 text-center">当前学科还没有录入历史。</div>
+              ) : (
+                filteredHistory.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => restoreHistoryItem(item)}
+                    className="w-full border-b border-slate-800/80 px-4 py-3 text-left hover:bg-slate-800/50 transition-colors"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] uppercase tracking-widest text-slate-400">
+                            {WORKFLOW_META[item.workflow].label}
+                          </span>
+                          <span className="text-[11px] text-slate-600">{new Date(item.timestamp).toLocaleString()}</span>
+                        </div>
+                        <div className="truncate text-sm text-slate-200">
+                          {item.input || `图片录入，共 ${item.images.length} 张素材`}
+                        </div>
                       </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
+                      <Trash2
+                        className="h-4 w-4 text-slate-600 hover:text-rose-400"
+                        onClick={(event) => {
+                          event.stopPropagation();
                           dispatch({ type: 'DELETE_INPUT_HISTORY', payload: item.id });
                         }}
-                        className="p-1 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
-                        title="删除历史记录"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
+                      />
                     </div>
-                  </div>
-                ))}
-              {state.inputHistory.filter(h => h.subject === state.currentSubject).length === 0 && (
-                <div className="p-8 text-center text-slate-600 text-[10px] uppercase tracking-widest">暂无历史记录</div>
+                  </button>
+                ))
               )}
             </div>
           </div>
         )}
-        
-        <div 
-          className={clsx(
-            "space-y-3 p-3 rounded-xl border-2 border-dashed transition-all duration-200",
-            isDragging ? "border-indigo-400 bg-indigo-500/10 scale-[1.01]" : "border-transparent"
-          )}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-        >
-          <div className="space-y-3">
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => setInput(prev => prev + '【重点】')} className="text-[10px] px-2 py-1 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 rounded border border-amber-500/20 transition-colors">☆ 标记重点</button>
-              <button onClick={() => setInput(prev => prev + '【疑问】')} className="text-[10px] px-2 py-1 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 rounded border border-blue-500/20 transition-colors">？ 标记疑问</button>
-              <button onClick={() => setInput(prev => prev + '【错题】')} className="text-[10px] px-2 py-1 bg-red-500/10 text-red-400 hover:bg-red-500/20 rounded border border-red-500/20 transition-colors">❌ 标记错题</button>
-              <button onClick={() => setInput(prev => prev + '【易错】')} className="text-[10px] px-2 py-1 bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 rounded border border-purple-500/20 transition-colors">⚠️ 标记易错点</button>
-            </div>
-            <textarea
-              value={input}
-              onChange={(e) => {
-                setInput(e.target.value);
-                dispatch({ type: 'UPDATE_DRAFT', payload: { draftInput: e.target.value, draftImages: images } });
-              }}
-              placeholder="在此输入散乱的知识点、错题解析或方法论... (例如：标况下为液体：HF；12g石墨中含有的C-C键数目为1.5Na)"
-              className="w-full h-32 p-3 rounded-lg border border-slate-700 bg-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none text-slate-200 text-xs"
-            />
-            
-            <textarea
-              value={supplementaryInstruction}
-              onChange={(e) => setSupplementaryInstruction(e.target.value)}
-              placeholder="补充说明/处理要求 (可选)：例如'请只提取图片中打红叉的题目'或'请帮我把这段文字总结成3个要点'"
-              className="w-full h-16 p-2 rounded-lg border border-slate-700 bg-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none text-slate-300 text-[10px]"
-            />
-          </div>
+      </div>
 
-          <div className="flex items-center gap-3">
-            <input
-              type="file"
-              accept="image/*,application/pdf,.docx"
-              multiple
-              className="hidden"
-              ref={fileInputRef}
-              onChange={handleImageUpload}
-            />
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className={clsx(
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-md border transition-colors text-[10px]",
-                isDragging ? "border-indigo-400 text-indigo-400 bg-indigo-500/10" : "border-slate-700 text-slate-400 hover:bg-slate-800"
-              )}
-            >
-              <UploadCloud className="w-3.5 h-3.5" />
-              {isDragging ? "松开鼠标以上传" : "上传错题/试卷/笔记 (图片/PDF/Word)"}
-            </button>
-            <label className="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer hover:text-indigo-400 transition-colors">
-              <input
-                type="checkbox"
-                checked={isScanMode}
-                onChange={(e) => setIsScanMode(e.target.checked)}
-                className="w-3.5 h-3.5 text-indigo-500 rounded border-slate-700 bg-slate-800 focus:ring-indigo-500"
+      <div
+        onDragOver={(event) => {
+          event.preventDefault();
+          setIsDragging(true);
+        }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={handleDrop}
+        className={clsx(
+          'rounded-3xl border p-4 md:p-6 transition-all',
+          isDragging ? 'border-indigo-500/40 bg-indigo-500/5' : 'border-slate-800 bg-slate-950'
+        )}
+      >
+        <div className="grid gap-6 lg:grid-cols-[1.7fr_1fr]">
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                <div>
+                  <div className="text-sm font-semibold text-white">{activeMeta.label}</div>
+                  <div className="text-xs text-slate-500 mt-1">{activeMeta.subtitle}</div>
+                </div>
+                <div className="w-full md:w-64">
+                  <ModelSelector
+                    value={selectedModel}
+                    onChange={setSelectedModel}
+                    className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+                  />
+                </div>
+              </div>
+
+              <textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                placeholder={
+                  workflow === 'quick'
+                    ? '输入知识点、错因、方法总结或课后笔记。支持零散文本快速整理。'
+                    : workflow === 'image_pro'
+                      ? '可补充说明图片中的重点、疑问、批注含义或希望优先提取的区域。'
+                      : '描述这套试卷/作业的背景，例如月考、作业订正、专题训练等。'
+                }
+                className="h-40 w-full resize-none rounded-2xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-200 outline-none focus:border-indigo-500"
               />
-              扫描模式 (增强清晰度)
-            </label>
-            <label className="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer hover:text-indigo-400 transition-colors">
-              <input
-                type="checkbox"
-                checked={isFullExamMode}
-                onChange={(e) => setIsFullExamMode(e.target.checked)}
-                className="w-3.5 h-3.5 text-indigo-500 rounded border-slate-700 bg-slate-800 focus:ring-indigo-500"
+
+              <textarea
+                value={supplementaryInstruction}
+                onChange={(event) => setSupplementaryInstruction(event.target.value)}
+                placeholder="补充处理要求，例如：只提取打叉题目、保留原题条件、把用户问号当作待讲解点。"
+                className="mt-3 h-24 w-full resize-none rounded-2xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-300 outline-none focus:border-indigo-500"
               />
-              整卷分析 (试卷+答题卡)
-            </label>
-            {images.length > 0 && (
-              <div className="flex gap-2 overflow-x-auto pb-2 max-w-md">
-                {images.map((img, idx) => (
-                  <div key={idx} className="relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border border-slate-700">
-                    {img.startsWith('data:application/pdf') ? (
-                      <div className="w-full h-full flex items-center justify-center bg-slate-800 text-slate-400" title="PDF试卷">
-                        <FileText className="w-8 h-8" />
-                      </div>
-                    ) : (
-                      /* eslint-disable-next-line @next/next/no-img-element */
-                      <img src={img} alt={`Preview ${idx}`} className="w-full h-full object-cover" />
-                    )}
-                    <button
-                      onClick={() => {
-                        setImages(prev => {
-                          const newImages = prev.filter((_, i) => i !== idx);
-                          dispatch({ type: 'UPDATE_DRAFT', payload: { draftInput: input, draftImages: newImages } });
-                          return newImages;
-                        });
-                      }}
-                      className="absolute top-1 right-1 bg-black/50 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs"
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <label className="space-y-2">
+                <span className="text-xs uppercase tracking-widest text-slate-500">功能分类</span>
+                <select
+                  value={explicitFunction}
+                  onChange={(event) => setExplicitFunction(event.target.value)}
+                  className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+                >
+                  <option value="auto">自动判断</option>
+                  {functionOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-2">
+                <span className="text-xs uppercase tracking-widest text-slate-500">目的分类</span>
+                <select
+                  value={explicitPurpose}
+                  onChange={(event) => setExplicitPurpose(event.target.value)}
+                  className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+                >
+                  <option value="auto">自动判断</option>
+                  {purposeOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+                <input
+                  type="checkbox"
+                  checked={markAsMistake}
+                  onChange={(event) => setMarkAsMistake(event.target.checked)}
+                  className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500"
+                />
+                <div>
+                  <div className="text-sm font-medium text-slate-200">优先标为错题</div>
+                  <div className="text-xs text-slate-500 mt-1">保存时默认加上错题属性</div>
+                </div>
+              </label>
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+                <div className="text-sm font-medium text-slate-200">自动清理策略</div>
+                <div className="mt-1 text-xs leading-6 text-slate-500">
+                  当前上传图片默认保存到资源库，{state.settings.resourceAutoCleanupDays || 21} 天后自动清理未被固定的旧素材。
+                </div>
+              </div>
+            </div>
+
+            {(workflow === 'image_pro' || workflow === 'exam') && (
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                <div className="flex items-center gap-2 mb-4">
+                  <FileImage className="h-4 w-4 text-amber-400" />
+                  <div className="text-sm font-semibold text-white">专业处理参数</div>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {[
+                    ['enhanceImage', '增强文档清晰度'],
+                    ['preserveAnnotations', '保留批注与符号'],
+                    ['splitQuestions', '自动拆分多题'],
+                    ['extractVocabulary', '提取图片词汇/术语'],
+                    ['prioritizeAccuracy', '不确定时优先保守'],
+                  ].map(([key, label]) => (
+                    <label
+                      key={key}
+                      className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950 px-4 py-3"
                     >
-                      ×
-                    </button>
-                  </div>
-                ))}
+                      <input
+                        type="checkbox"
+                        checked={Boolean(imageOptions[key as keyof typeof imageOptions])}
+                        onChange={(event) =>
+                          setImageOptions((previous) => ({
+                            ...previous,
+                            [key]: event.target.checked,
+                          }))
+                        }
+                        className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500"
+                      />
+                      <span className="text-sm text-slate-200">{label}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
             )}
-          </div>
 
-          <div className="grid grid-cols-3 gap-4 pt-2">
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">功能分类 (可选)</label>
-              <select 
-                value={explicitFunction}
-                onChange={(e) => setExplicitFunction(e.target.value)}
-                className="w-full p-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="auto">自动 (AI 判断)</option>
-                {['细碎记忆', '方法论', '关联型记忆', '系统型', ...Array.from(new Set(state.memories.map(m => m.functionType))).filter(t => t && !['细碎记忆', '方法论', '关联型记忆', '系统型'].includes(t))].map(t => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">目的分类 (可选)</label>
-              <select 
-                value={explicitPurpose}
-                onChange={(e) => setExplicitPurpose(e.target.value)}
-                className="w-full p-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="auto">自动 (AI 判断)</option>
-                {['内化型', '记忆型', '补充知识型', '系统型', ...Array.from(new Set(state.memories.map(m => m.purposeType))).filter(t => t && !['内化型', '记忆型', '补充知识型', '系统型'].includes(t))].map(t => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">解析模型</label>
-              <ModelSelector
-                value={selectedModel}
-                onChange={setSelectedModel}
-                className="w-full p-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 pt-2">
-            <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={isMistake}
-                onChange={(e) => setIsMistake(e.target.checked)}
-                className="w-4 h-4 text-indigo-500 rounded border-slate-700 bg-slate-800 focus:ring-indigo-500"
-              />
-              标记为错题
-            </label>
-          </div>
-        </div>
-
-        <button
-          onClick={() => handleSubmit(false)}
-          disabled={loading || (!input && images.length === 0)}
-          className={clsx(
-            'w-full py-3 rounded-xl font-medium text-white flex items-center justify-center gap-2 transition-all mt-4',
-            loading || (!input && images.length === 0)
-              ? 'bg-indigo-500/50 cursor-not-allowed'
-              : 'bg-indigo-600 hover:bg-indigo-700 shadow-md hover:shadow-lg'
-          )}
-        >
-          {loading ? (
-            <>
-              <Loader2 className="w-5 h-5 animate-spin" />
-              AI 正在深度解析并关联知识图谱...
-            </>
-          ) : success ? (
-            <>
-              <CheckCircle2 className="w-5 h-5" />
-              录入成功！已自动分类并关联知识点
-            </>
-          ) : (
-            '一键 AI 整理并存入记忆库'
-          )}
-        </button>
-      </div>
-      
-      {analysisProcess && (
-        <div className="bg-slate-900 rounded-2xl shadow-sm border border-slate-800 p-6">
-          <h3 className="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-2">
-            <Info className="w-4 h-4 text-indigo-400" />
-            AI 分析过程与意图识别
-          </h3>
-          <div className="p-4 bg-slate-800/50 border border-slate-700 rounded-xl text-sm text-slate-300 whitespace-pre-wrap leading-relaxed prose prose-sm prose-invert max-w-none">
-            <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{analysisProcess}</Markdown>
-          </div>
-        </div>
-      )}
-      
-      <div className="bg-indigo-900/20 rounded-xl p-4 text-sm text-indigo-300 border border-indigo-500/20">
-        <p className="font-medium mb-1">💡 录入提示：</p>
-        <ul className="list-disc list-inside space-y-1 opacity-80">
-          <li>支持批量录入，AI会自动拆分独立的知识点。</li>
-          <li>上传错题图片时，可以补充文字说明你的易错点或疑惑。</li>
-          <li>你可以手动指定分类，让 AI 解析更加精准。</li>
-        </ul>
-      </div>
-
-      {state.memories.length > 0 && (
-        <div className="bg-slate-900 rounded-2xl shadow-sm border border-slate-800 p-6 mt-6">
-          <h3 className="text-sm font-semibold text-slate-200 mb-4 flex items-center gap-2">
-            <Info className="w-4 h-4 text-indigo-400" />
-            最近录入历史
-          </h3>
-          <div className="space-y-3">
-            {state.memories
-              .sort((a, b) => b.createdAt - a.createdAt)
-              .slice(0, 5)
-              .map(memory => (
-                <div key={memory.id} className="p-3 bg-slate-800/50 border border-slate-700 rounded-xl">
-                  <div className="flex justify-between items-start mb-2">
-                    <span className="text-xs font-medium text-indigo-400 bg-indigo-500/10 px-2 py-1 rounded">
-                      {memory.subject} · {memory.functionType}
-                    </span>
-                    <span className="text-xs text-slate-500">
-                      {new Date(memory.createdAt).toLocaleString()}
-                    </span>
-                  </div>
-                  <p className="text-sm text-slate-300 line-clamp-2">{memory.content}</p>
+            <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-900/30 p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,application/pdf,.docx"
+                  multiple
+                  className="hidden"
+                  onChange={handleInputFileChange}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-200 hover:border-slate-600"
+                >
+                  <UploadCloud className="h-4 w-4" />
+                  上传图片 / PDF / Word
+                </button>
+                <div className="text-xs leading-6 text-slate-500">
+                  支持拖拽、粘贴图片。上传素材会自动进入资源库并带上生命周期信息，方便后续导出给我做优化。
                 </div>
-              ))}
+              </div>
+
+              {draftAssets.length > 0 && (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  {draftAssets.map((asset) => (
+                    <div key={asset.resourceId} className="rounded-2xl border border-slate-800 bg-slate-950 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium text-slate-200">{asset.name}</div>
+                          <div className="text-[11px] text-slate-500 mt-1">{asset.type || 'unknown'}</div>
+                        </div>
+                        <button
+                          onClick={() => removeDraftAsset(asset.resourceId)}
+                          className="rounded-lg p-1 text-slate-600 hover:bg-slate-800 hover:text-rose-400"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <div className="mt-3 aspect-video overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+                        {asset.preview.startsWith('data:image') ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={asset.preview} alt={asset.name} className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-slate-500">
+                            <FileText className="h-6 w-6" />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={() => runParse(false)}
+              disabled={loading || (!input.trim() && draftAssets.length === 0)}
+              className={clsx(
+                'w-full rounded-2xl px-5 py-4 text-sm font-semibold text-white transition-all',
+                loading || (!input.trim() && draftAssets.length === 0)
+                  ? 'cursor-not-allowed bg-indigo-500/40'
+                  : 'bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-900/30'
+              )}
+            >
+              {loading ? '处理中...' : `开始 ${activeMeta.label}`}
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-slate-800 bg-slate-950 p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Info className="h-4 w-4 text-indigo-400" />
+                <div className="text-sm font-semibold text-white">本流程会记录什么</div>
+              </div>
+              <ul className="space-y-2 text-sm leading-7 text-slate-400">
+                <li>解析日志会附带工作流、学科、资源关联，便于后续导出优化包。</li>
+                <li>图片默认进入资源库，未固定旧素材将按规则自动清理。</li>
+                <li>你的重生成、编辑、删除和对话反馈会反向沉淀为 AI 注意事项。</li>
+              </ul>
+            </div>
+
+            <div className="rounded-2xl border border-slate-800 bg-slate-950 p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <AlertCircle className="h-4 w-4 text-amber-400" />
+                <div className="text-sm font-semibold text-white">AI 当前注意点</div>
+              </div>
+              <div className="space-y-3 text-sm leading-7 text-slate-400">
+                <p>{state.settings.aiAttentionNotes || '暂未设置。'}</p>
+                {state.settings.feedbackLearningNotes && (
+                  <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300 whitespace-pre-wrap">
+                    {state.settings.feedbackLearningNotes}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
+      </div>
+
+      {pendingReview && (
+        <div className="rounded-3xl border border-indigo-500/20 bg-slate-950 p-4 md:p-6">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <div className="text-xs uppercase tracking-widest text-indigo-400 mb-2">Review Before Save</div>
+              <h3 className="text-2xl font-black tracking-tight text-white">{pendingReview.parsedItems.length} 条待确认结果</h3>
+              <p className="mt-2 text-sm text-slate-400 leading-7">
+                你可以直接保存全部、逐条保存，或补充说明后重生成。这些行为都会被记为偏好反馈。
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={() => runParse(true)}
+                className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-200 hover:border-slate-600"
+              >
+                重生成
+              </button>
+              <button
+                onClick={() => persistParsedItems(pendingReview.parsedItems)}
+                className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+              >
+                保存全部
+              </button>
+              <button
+                onClick={() => setPendingReview(null)}
+                className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-300 hover:border-slate-600"
+              >
+                稍后处理
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="text-xs uppercase tracking-widest text-slate-500 mb-2">AI 分析过程</div>
+            <div className="prose prose-invert prose-sm max-w-none text-slate-300">
+              <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                {pendingReview.aiAnalysis || '暂无分析说明。'}
+              </Markdown>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 xl:grid-cols-2">
+            {pendingReview.parsedItems.map((item, index) => (
+              <div key={`${pendingReview.id}-${index}`} className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2 mb-2">
+                      <span className="rounded-full bg-slate-800 px-2 py-1 text-[10px] uppercase tracking-widest text-slate-400">
+                        {item.type || 'concept'}
+                      </span>
+                      {item.isMistake && (
+                        <span className="rounded-full bg-rose-500/10 px-2 py-1 text-[10px] uppercase tracking-widest text-rose-300">
+                          错题
+                        </span>
+                      )}
+                      {item.questionType && (
+                        <span className="rounded-full bg-indigo-500/10 px-2 py-1 text-[10px] uppercase tracking-widest text-indigo-200">
+                          {item.questionType}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-base font-semibold text-white leading-7">{item.content}</div>
+                  </div>
+                  <button
+                    onClick={() => persistParsedItems([item], index)}
+                    className="shrink-0 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500"
+                  >
+                    保存此条
+                  </button>
+                </div>
+
+                {(item.correctAnswer || item.notes || item.errorReason || item.wrongAnswer) && (
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    {item.correctAnswer && (
+                      <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+                        <div className="text-[10px] uppercase tracking-widest text-emerald-300 mb-2">标准答案</div>
+                        <div className="text-sm text-emerald-100 whitespace-pre-wrap">{item.correctAnswer}</div>
+                      </div>
+                    )}
+                    {item.wrongAnswer && (
+                      <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-3">
+                        <div className="text-[10px] uppercase tracking-widest text-rose-300 mb-2">错误答案</div>
+                        <div className="text-sm text-rose-100 whitespace-pre-wrap">{item.wrongAnswer}</div>
+                      </div>
+                    )}
+                    {item.errorReason && (
+                      <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 md:col-span-2">
+                        <div className="text-[10px] uppercase tracking-widest text-amber-300 mb-2">错因分析</div>
+                        <div className="text-sm text-amber-100 whitespace-pre-wrap">{item.errorReason}</div>
+                      </div>
+                    )}
+                    {item.notes && (
+                      <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 md:col-span-2">
+                        <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-2">补充说明</div>
+                        <div className="text-sm text-slate-300 whitespace-pre-wrap">{item.notes}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {item.vocabularyData && (
+                  <div className="mt-4 rounded-xl border border-sky-500/20 bg-sky-500/5 p-3">
+                    <div className="text-[10px] uppercase tracking-widest text-sky-300 mb-2">词汇补充</div>
+                    <div className="grid gap-2 text-sm text-sky-100 md:grid-cols-2">
+                      {item.vocabularyData.meaning && <div>含义：{item.vocabularyData.meaning}</div>}
+                      {item.vocabularyData.usage && <div>用法：{item.vocabularyData.usage}</div>}
+                      {item.vocabularyData.context && <div className="md:col-span-2">语境：{item.vocabularyData.context}</div>}
+                    </div>
+                  </div>
+                )}
+
+                {item.nodeIds && item.nodeIds.length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {item.nodeIds.map((nodeId) => {
+                      const node = state.knowledgeNodes.find((entry) => entry.id === nodeId);
+                      return (
+                        <span
+                          key={`${pendingReview.id}-${index}-${nodeId}`}
+                          className="rounded-full border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] uppercase tracking-widest text-slate-400"
+                        >
+                          {node?.name || nodeId}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {(pendingReview.newNodes.length > 0 || pendingReview.deletedNodeIds.length > 0) && (
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                <div className="text-xs uppercase tracking-widest text-slate-500 mb-2">建议新增节点</div>
+                {pendingReview.newNodes.length === 0 ? (
+                  <div className="text-sm text-slate-500">无</div>
+                ) : (
+                  pendingReview.newNodes.map((node: any, index) => (
+                    <div key={`${node.name}-${index}`} className="text-sm text-slate-300 py-1">
+                      {node.name}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                <div className="text-xs uppercase tracking-widest text-slate-500 mb-2">建议删除节点</div>
+                {pendingReview.deletedNodeIds.length === 0 ? (
+                  <div className="text-sm text-slate-500">无</div>
+                ) : (
+                  pendingReview.deletedNodeIds.map((nodeId) => (
+                    <div key={nodeId} className="text-sm text-rose-300 py-1">
+                      {state.knowledgeNodes.find((node) => node.id === nodeId)?.name || nodeId}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       )}
+
+      <div className="rounded-3xl border border-emerald-500/20 bg-emerald-500/5 p-4 md:p-5">
+        <div className="flex items-center gap-2 mb-3 text-emerald-200">
+          <CheckCircle2 className="h-4 w-4" />
+          <div className="text-sm font-semibold">为了后续让我更好地帮你优化</div>
+        </div>
+        <div className="space-y-2 text-sm leading-7 text-emerald-50/90">
+          <p>在“AI 日志”里可以直接导出优化包，包含日志、录入历史、低质量记忆、反馈事件和相关图片资料。</p>
+          <p>你对结果进行重生成、编辑记忆、删除不准内容或评价对话后，系统会自动学习这些偏好并更新 AI 注意事项。</p>
+        </div>
+      </div>
     </div>
   );
 }

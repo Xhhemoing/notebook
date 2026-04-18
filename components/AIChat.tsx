@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAppContext } from '@/lib/store';
 import { chatWithAI, searchMemoriesRAG, reorganizeMemories, extractMemoryFromChat, generateGatewaySummary } from '@/lib/ai';
-import { Send, Bot, User, Loader2, Paperclip, X, Image as ImageIcon, BookOpen, UploadCloud, Search, Sparkles, Database, Settings2, RefreshCw, Wand2 } from 'lucide-react';
+import { Send, Bot, User, Loader2, X, Image as ImageIcon, UploadCloud, Search, Sparkles, Database, RefreshCw, Wand2, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { clsx } from 'clsx';
 import Markdown from 'react-markdown';
 import remarkMath from 'remark-math';
@@ -11,6 +11,7 @@ import rehypeKatex from 'rehype-katex';
 import { v4 as uuidv4 } from 'uuid';
 import { ModelSelector } from '@/components/ModelSelector';
 import { createMemoryPayload } from '@/lib/data/commands';
+import { getAutoExpireAt } from '@/lib/feedback';
 
 import { TextbookPagePreview } from './TextbookPagePreview';
 
@@ -19,6 +20,7 @@ interface Message {
   role: 'user' | 'ai';
   content: string;
   image?: string;
+  feedback?: 'helpful' | 'inaccurate';
 }
 
 function renderMessageContent(content: string) {
@@ -51,6 +53,40 @@ export function AIChat() {
   const [isReorganizing, setIsReorganizing] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
   const [selectedModel, setSelectedModel] = useState(state.settings.chatModel);
+
+  const addFeedback = (
+    targetId: string,
+    signalType: 'chat_helpful' | 'chat_inaccurate',
+    note?: string
+  ) => {
+    dispatch({
+      type: 'ADD_FEEDBACK_EVENT',
+      payload: {
+        id: uuidv4(),
+        timestamp: Date.now(),
+        subject: state.currentSubject,
+        targetType: 'chat',
+        targetId,
+        signalType,
+        sentiment: signalType === 'chat_helpful' ? 'positive' : 'negative',
+        note,
+        metadata: {
+          workflow: 'chat',
+          model: selectedModel,
+        },
+      },
+    });
+  };
+
+  const markMessageFeedback = (messageId: string, feedback: 'helpful' | 'inaccurate') => {
+    const current = messages.find((message) => message.id === messageId);
+    if (current?.feedback === feedback) return;
+
+    setMessages((previous) =>
+      previous.map((message) => (message.id === messageId ? { ...message, feedback } : message))
+    );
+    addFeedback(messageId, feedback === 'helpful' ? 'chat_helpful' : 'chat_inaccurate');
+  };
 
   // Sync selectedModel if default changes
   useEffect(() => {
@@ -136,9 +172,14 @@ export function AIChat() {
             dispatch({
               type: 'ADD_LOG',
               payload: {
-                id: Math.random().toString(36).substr(2, 9),
-                timestamp: Date.now(),
-                ...log
+                ...log,
+                subject: state.currentSubject,
+                workflow: 'chat',
+                resourceIds: currentImageResourceId ? [currentImageResourceId] : undefined,
+                metadata: {
+                  selectedMemoryCount: currentSelectedMemories.length,
+                  ragEnabled: enableRAG,
+                },
               }
             });
           }
@@ -194,8 +235,13 @@ export function AIChat() {
             type: file.type || 'unknown',
             size: file.size,
             createdAt: Date.now(),
+            updatedAt: Date.now(),
             data: base64,
             subject: state.currentSubject,
+            origin: 'chat_upload',
+            retentionPolicy: 'auto',
+            expiresAt: getAutoExpireAt(state.settings.resourceAutoCleanupDays || 21),
+            tags: ['chat', 'conversation-image'],
             isFolder: false,
             parentId: null
           }
@@ -235,8 +281,13 @@ export function AIChat() {
             type: file.type || 'unknown',
             size: file.size,
             createdAt: Date.now(),
+            updatedAt: Date.now(),
             data: base64,
             subject: state.currentSubject,
+            origin: 'chat_upload',
+            retentionPolicy: 'auto',
+            expiresAt: getAutoExpireAt(state.settings.resourceAutoCleanupDays || 21),
+            tags: ['chat', 'conversation-image'],
             isFolder: false,
             parentId: null
           }
@@ -341,6 +392,35 @@ export function AIChat() {
                 <div className="prose prose-invert prose-sm max-w-none prose-headings:text-white prose-strong:text-blue-300 prose-code:text-blue-200 prose-pre:bg-slate-950 prose-pre:border prose-pre:border-slate-800 text-sm">
                   {renderMessageContent(msg.content)}
                 </div>
+                {msg.role === 'ai' && (
+                  <div className="mt-4 flex items-center gap-2 text-[10px] uppercase tracking-widest text-slate-500">
+                    <span>反馈</span>
+                    <button
+                      onClick={() => markMessageFeedback(msg.id, 'helpful')}
+                      className={clsx(
+                        'inline-flex items-center gap-1 rounded-full border px-2 py-1 transition-colors',
+                        msg.feedback === 'helpful'
+                          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                          : 'border-slate-700 bg-slate-950 text-slate-400 hover:border-slate-600'
+                      )}
+                    >
+                      <ThumbsUp className="h-3 w-3" />
+                      有帮助
+                    </button>
+                    <button
+                      onClick={() => markMessageFeedback(msg.id, 'inaccurate')}
+                      className={clsx(
+                        'inline-flex items-center gap-1 rounded-full border px-2 py-1 transition-colors',
+                        msg.feedback === 'inaccurate'
+                          ? 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                          : 'border-slate-700 bg-slate-950 text-slate-400 hover:border-slate-600'
+                      )}
+                    >
+                      <ThumbsDown className="h-3 w-3" />
+                      不够准
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -527,9 +607,12 @@ export function AIChat() {
                                       dispatch({
                                         type: 'ADD_LOG',
                                         payload: {
-                                          id: Math.random().toString(36).substr(2, 9),
-                                          timestamp: Date.now(),
-                                          ...log
+                                          ...log,
+                                          subject: state.currentSubject,
+                                          workflow: 'chat',
+                                          metadata: {
+                                            gatewayType: skill.gatewayType,
+                                          },
                                         }
                                       });
                                     }
