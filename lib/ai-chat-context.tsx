@@ -1,12 +1,13 @@
 'use client';
 
 import React, { createContext, useContext } from 'react';
-import { useChat } from '@ai-sdk/react';
+import { useChat, type UseChatHelpers } from '@ai-sdk/react';
+import { DefaultChatTransport, type FileUIPart, type UIMessage } from 'ai';
 import { useAppContext } from './store';
 import { v4 as uuidv4 } from 'uuid';
 import { Memory } from './types';
 
-type GlobalAIChatContextType = ReturnType<typeof useChat> & {
+type GlobalAIChatContextType = UseChatHelpers<UIMessage> & {
   startMistakeAnalysis: (images: string[]) => void;
   startGraphAnalysis: (text: string, images?: string[]) => void;
   clearChat: () => void;
@@ -14,36 +15,48 @@ type GlobalAIChatContextType = ReturnType<typeof useChat> & {
 
 const GlobalAIChatContext = createContext<GlobalAIChatContextType | null>(null);
 
+function toFilePart(image: string): FileUIPart {
+  const mediaType = image.match(/^data:([^;]+);/)?.[1] || 'image/jpeg';
+  return {
+    type: 'file',
+    url: image,
+    mediaType,
+  };
+}
+
 export function GlobalAIChatProvider({ children }: { children: React.ReactNode }) {
   const { state, dispatch } = useAppContext();
-  
-  const chat = useChat({
-    api: '/api/chat',
+
+  const chat = useChat<UIMessage>({
+    transport: new DefaultChatTransport({
+      api: '/api/chat',
+    }),
     onToolCall({ toolCall }) {
+      const toolInput = 'input' in toolCall ? toolCall.input as any : undefined;
+
       if (toolCall.toolName === 'proposeGraphChanges') {
-        const { changes, analysis } = toolCall.args as any;
+        const { changes, analysis } = toolInput || {};
         console.log('Got graph changes tool call:', changes);
-        // Translate changes directly into draftGraphProposal operations
-        const operations = changes.map((c: any) => {
-          if (c.action === 'ADD_NODE') {
-             return { action: 'add', name: c.targetName, parentId: null };
-          } else if (c.action === 'ADD_RELATION') {
-             return { action: 'move', nodeId: c.targetName, parentId: null }; 
-             // Just an approximation since we don't know the exact IDs in the tool call 
-             // But actually, we just pass what we can so the human-in-the-loop catches it.
+
+        const operations = (changes || []).map((change: any) => {
+          if (change.action === 'ADD_NODE') {
+            return { action: 'add', name: change.targetName, parentId: null };
+          }
+          if (change.action === 'ADD_RELATION') {
+            return { action: 'move', nodeId: change.targetName, parentId: null };
           }
           return null;
         }).filter(Boolean);
 
-        dispatch({ 
-          type: 'UPDATE_DRAFT', 
-          payload: { 
-            draftGraphProposal: { reasoning: analysis, operations: operations } 
-          } 
+        dispatch({
+          type: 'UPDATE_DRAFT',
+          payload: {
+            draftGraphProposal: { reasoning: analysis || '', operations },
+          },
         });
       } else if (toolCall.toolName === 'storeMistake') {
-        const payload = toolCall.args as any;
-        
+        const payload = toolInput || {};
+
         const mistakeMemory: Memory = {
           id: uuidv4(),
           subject: state.currentSubject,
@@ -59,32 +72,26 @@ export function GlobalAIChatProvider({ children }: { children: React.ReactNode }
           wrongAnswer: payload.studentAnswer,
           correctAnswer: payload.correctAnswer,
           errorReason: payload.explanation,
-          visualDescription: payload.coreConcept
+          visualDescription: payload.coreConcept,
         };
-        
+
         dispatch({ type: 'ADD_MEMORY', payload: mistakeMemory });
-        console.log('Mistake memory added via AI tool call!');
+        console.log('Mistake memory added via AI tool call.');
       }
-    }
+    },
   });
 
   const startMistakeAnalysis = (images: string[]) => {
-    chat.append({
-      role: 'user',
-      content: [
-        { type: 'text', text: '请分析这张错题截图，提取原题、我的错解、正确答案，并指出核心概念和我的错因。完成分析后请自动调用存储错题(storeMistake) 的工具保存！如果有图谱推荐也请调用 proposeGraphChanges。' },
-        ...images.map(img => ({ type: 'image', image: img }))
-      ] as any
+    void chat.sendMessage({
+      text: '请分析这张错题截图，提取原题、我的错误答案、正确答案，并指出核心概念和错因。完成分析后请自动调用 storeMistake 工具保存；如果有图谱建议，也请调用 proposeGraphChanges。',
+      files: images.map(toFilePart),
     });
   };
 
   const startGraphAnalysis = (text: string, images?: string[]) => {
-    chat.append({
-      role: 'user',
-      content: [
-        { type: 'text', text: `请根据以下资料更新我的知识图谱: ${text}` },
-        ...(images ? images.map(img => ({ type: 'image', image: img })) : [])
-      ] as any
+    void chat.sendMessage({
+      text: `请根据以下资料更新我的知识图谱：${text}`,
+      files: images?.map(toFilePart),
     });
   };
 

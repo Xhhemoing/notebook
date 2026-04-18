@@ -23,7 +23,7 @@ export async function POST(req: Request) {
     });
 
     // 3. Stream response to frontend
-    return result.toDataStreamResponse();
+    return result.toTextStreamResponse();
   } catch (error) {
     console.error('[Exam Prep API] Error:', error);
     return new Response(JSON.stringify({ error: 'Internal Server Error' }), { status: 500 });

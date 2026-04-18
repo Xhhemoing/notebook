@@ -20,7 +20,11 @@ export default function DataSettings() {
           alert('同步到云端失败，请检查配置。');
         }
       } else {
-        const cloudState = await pullFromCloudflare(state.settings.cloudflareEndpoint || '', state.settings.cloudflareToken || '');
+        const cloudState = await pullFromCloudflare(
+          state.settings.cloudflareEndpoint || '',
+          state.settings.cloudflareToken || '',
+          state.settings.syncKey || ''
+        );
         if (cloudState) {
           dispatch({ type: 'LOAD_STATE', payload: cloudState });
           alert('从云端恢复成功！');

@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "clean": "next clean"
+    "typecheck": "tsc --noEmit",
+    "clean": "node -e \"const fs=require('fs'); for (const target of ['.next','tsconfig.tsbuildinfo','tsconfig-1.tsbuildinfo']) { fs.rmSync(target,{recursive:true,force:true}); }\""
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.63",

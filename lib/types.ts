@@ -29,6 +29,7 @@ export interface Memory {
   confidence: number; // 0-100, maps to FSRS retrievability
   mastery: number; // 0-100, maps to FSRS stability
   createdAt: number;
+  updatedAt?: number;
   lastReviewed?: number;
   notes?: string;
   sourceType: 'text' | 'image';
@@ -60,6 +61,7 @@ export interface KnowledgeNode {
   name: string;
   parentId: string | null;
   order: number; // Order within siblings
+  updatedAt?: number;
   correlation?: { [targetId: string]: number }; // Correlation score 0-1 with other nodes
   testingMethods?: string[]; // 考法
 }
@@ -238,4 +240,5 @@ export type Action =
   | { type: 'UPDATE_DRAFT'; payload: { draftInput?: string; draftImages?: string[]; draftGraphProposal?: { reasoning: string; operations: any[] } | null; } }
   | { type: 'ADD_RESOURCE'; payload: Resource }
   | { type: 'DELETE_RESOURCE'; payload: string }
-  | { type: 'SET_RESOURCES'; payload: Resource[] };
+  | { type: 'SET_RESOURCES'; payload: Resource[] }
+  | { type: 'REMOVE_DRAFT_PROPOSAL'; payload: string };

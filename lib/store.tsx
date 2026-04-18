@@ -73,11 +73,28 @@ export async function syncWithD1(state: AppState, dispatch: React.Dispatch<Actio
   if (typeof window === 'undefined' || window.location.hostname === 'localhost') return;
 
   try {
+    const authToken = state.settings.cloudflareToken?.trim();
+    const syncKey = state.settings.syncKey?.trim();
+
+    if (!authToken || !syncKey) {
+      console.warn('D1 Sync skipped: missing cloudflareToken or syncKey');
+      return;
+    }
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${authToken}`,
+    };
+
     // 1. Pull incremental changes
     const pullRes = await fetch('/api/sync', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'pull', payload: { lastSynced: state.lastSynced || 0 } })
+      headers,
+      body: JSON.stringify({
+        action: 'pull',
+        payload: { lastSynced: state.lastSynced || 0 },
+        syncKey,
+      })
     });
     
     if (pullRes.ok) {
@@ -97,22 +114,22 @@ export async function syncWithD1(state: AppState, dispatch: React.Dispatch<Actio
     }
 
     // 2. Push local changes
-    const pushMemories = state.memories.filter(m => m.createdAt > (state.lastSynced || 0));
+    const pushMemories = state.memories.filter(m => (m.updatedAt || m.createdAt) > (state.lastSynced || 0));
     if (pushMemories.length > 0) {
       const pushRes = await fetch('/api/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'push_memories', payload: pushMemories })
+        headers,
+        body: JSON.stringify({ action: 'push_memories', payload: pushMemories, syncKey })
       });
       if (!pushRes.ok) console.warn('D1 Sync Push Memories failed:', pushRes.status);
     }
 
-    const pushNodes = state.knowledgeNodes.filter(n => (n as any).updatedAt > (state.lastSynced || 0));
+    const pushNodes = state.knowledgeNodes.filter(n => (n.updatedAt || 0) > (state.lastSynced || 0));
     if (pushNodes.length > 0) {
       const pushRes = await fetch('/api/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'push_nodes', payload: pushNodes })
+        headers,
+        body: JSON.stringify({ action: 'push_nodes', payload: pushNodes, syncKey })
       });
       if (!pushRes.ok) console.warn('D1 Sync Push Nodes failed:', pushRes.status);
     }
@@ -215,21 +232,31 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_SUBJECT':
       return { ...state, currentSubject: action.payload };
     case 'ADD_MEMORY':
-      return { ...state, memories: [action.payload, ...state.memories] };
+      return {
+        ...state,
+        memories: [{ ...action.payload, updatedAt: action.payload.updatedAt || Date.now() }, ...state.memories],
+      };
     case 'UPDATE_MEMORY':
       return {
         ...state,
-        memories: state.memories.map((m) => (m.id === action.payload.id ? action.payload : m)),
+        memories: state.memories.map((m) =>
+          m.id === action.payload.id ? { ...action.payload, updatedAt: Date.now() } : m
+        ),
       };
     case 'DELETE_MEMORY':
       return { ...state, memories: state.memories.filter((m) => m.id !== action.payload) };
     case 'ADD_NODE':
       if (state.knowledgeNodes.some(n => n.id === action.payload.id)) return state;
-      return { ...state, knowledgeNodes: [...state.knowledgeNodes, action.payload] };
+      return {
+        ...state,
+        knowledgeNodes: [...state.knowledgeNodes, { ...action.payload, updatedAt: action.payload.updatedAt || Date.now() }],
+      };
     case 'UPDATE_NODE':
       return {
         ...state,
-        knowledgeNodes: state.knowledgeNodes.map((n) => (n.id === action.payload.id ? action.payload : n)),
+        knowledgeNodes: state.knowledgeNodes.map((n) =>
+          n.id === action.payload.id ? { ...action.payload, updatedAt: Date.now() } : n
+        ),
       };
     case 'DELETE_NODE':
       // Also remove this node from any memories
@@ -243,10 +270,25 @@ function reducer(state: AppState, action: Action): AppState {
         memories: updatedMemories
       };
     case 'BATCH_ADD_MEMORIES':
-      return { ...state, memories: [...action.payload, ...state.memories] };
+      return {
+        ...state,
+        memories: [
+          ...action.payload.map(memory => ({
+            ...memory,
+            updatedAt: memory.updatedAt || memory.createdAt || Date.now(),
+          })),
+          ...state.memories,
+        ],
+      };
     case 'BATCH_ADD_NODES':
       const newNodes = action.payload.filter(newNode => !state.knowledgeNodes.some(existingNode => existingNode.id === newNode.id));
-      return { ...state, knowledgeNodes: [...state.knowledgeNodes, ...newNodes] };
+      return {
+        ...state,
+        knowledgeNodes: [
+          ...state.knowledgeNodes,
+          ...newNodes.map(node => ({ ...node, updatedAt: node.updatedAt || Date.now() })),
+        ],
+      };
     case 'BATCH_DELETE_NODES':
       const updatedMemoriesBatch = state.memories.map(m => ({
         ...m,

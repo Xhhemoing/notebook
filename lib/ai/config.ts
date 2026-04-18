@@ -1,6 +1,6 @@
 import { google } from '@ai-sdk/google';
 import { openai } from '@ai-sdk/openai';
-import { generateText, streamText, embed, CoreMessage, generateObject } from 'ai';
+import { generateText, streamText, embed, generateObject, type ModelMessage } from 'ai';
 import { z } from 'zod';
 
 // 统一对外暴露的获取大模型实例的方法
@@ -20,7 +20,7 @@ export const getEmbeddingModel = () => {
 interface GenerateOptions {
   tier?: 'fast' | 'smart';
   prompt?: string;
-  messages?: CoreMessage[];
+  messages?: ModelMessage[];
   system?: string;
   maxTokens?: number;
   temperature?: number;
@@ -28,6 +28,10 @@ interface GenerateOptions {
 
 interface GenerateObjectOptions<T> extends GenerateOptions {
   schema: z.ZodType<T>;
+}
+
+function getPromptInput(options: GenerateOptions): { prompt: string } | { messages: ModelMessage[] } {
+  return options.messages ? { messages: options.messages } : { prompt: options.prompt || '' };
 }
 
 /**
@@ -41,8 +45,7 @@ export async function generateObjectWithFallback<T>(options: GenerateObjectOptio
     const result = await generateObject({
       model: getLLM(tier),
       schema: options.schema,
-      prompt: options.prompt,
-      messages: options.messages,
+      ...getPromptInput(options),
       system: options.system,
       temperature: options.temperature,
     });
@@ -55,8 +58,7 @@ export async function generateObjectWithFallback<T>(options: GenerateObjectOptio
       const fallbackResult = await generateObject({
         model: getFallbackLLM(tier),
         schema: options.schema,
-        prompt: options.prompt,
-        messages: options.messages,
+        ...getPromptInput(options),
         system: options.system,
         temperature: options.temperature,
       });
@@ -78,10 +80,9 @@ export async function generateTextWithFallback(options: GenerateOptions) {
     console.log(`[AI Gateway] Attempting generation with Google model (tier: ${tier})`);
     const result = await generateText({
       model: getLLM(tier),
-      prompt: options.prompt,
-      messages: options.messages,
+      ...getPromptInput(options),
       system: options.system,
-      maxTokens: options.maxTokens,
+      maxOutputTokens: options.maxTokens,
       temperature: options.temperature,
     });
     return result;
@@ -92,10 +93,9 @@ export async function generateTextWithFallback(options: GenerateOptions) {
     try {
       const fallbackResult = await generateText({
         model: getFallbackLLM(tier),
-        prompt: options.prompt,
-        messages: options.messages,
+        ...getPromptInput(options),
         system: options.system,
-        maxTokens: options.maxTokens,
+        maxOutputTokens: options.maxTokens,
         temperature: options.temperature,
       });
       return fallbackResult;
@@ -116,10 +116,9 @@ export async function streamTextWithFallback(options: GenerateOptions) {
     console.log(`[AI Gateway] Attempting stream with Google model (tier: ${tier})`);
     return streamText({
       model: getLLM(tier),
-      prompt: options.prompt,
-      messages: options.messages,
+      ...getPromptInput(options),
       system: options.system,
-      maxTokens: options.maxTokens,
+      maxOutputTokens: options.maxTokens,
       temperature: options.temperature,
     });
   } catch (error) {
@@ -128,10 +127,9 @@ export async function streamTextWithFallback(options: GenerateOptions) {
     
     return streamText({
       model: getFallbackLLM(tier),
-      prompt: options.prompt,
-      messages: options.messages,
+      ...getPromptInput(options),
       system: options.system,
-      maxTokens: options.maxTokens,
+      maxOutputTokens: options.maxTokens,
       temperature: options.temperature,
     });
   }
