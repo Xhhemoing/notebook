@@ -1,4 +1,5 @@
 import { AILog, AppState, Resource, Settings, UserFeedbackEvent } from './types';
+import { normalizeInputHistoryItems } from './input-history';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -153,10 +154,8 @@ export function applyDataRetention(state: AppState, now = Date.now()): AppState 
 
   const resources = normalizedResources.filter((resource) => !expiredResourceIds.has(resource.id));
   const logs = pruneLogs(state.logs || [], state.settings, now);
-  const inputHistory = (state.inputHistory || []).map((item) => ({
-    ...item,
-    imageResourceIds: (item.imageResourceIds || []).filter((id) => !expiredResourceIds.has(id)),
-  }));
+  // Preserve history image ids so restored image annotations can still rebind after resource auto-cleanup.
+  const inputHistory = normalizeInputHistoryItems(state.inputHistory, state.currentSubject || '数学');
 
   return {
     ...state,

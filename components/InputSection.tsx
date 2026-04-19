@@ -4,14 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   BrainCircuit,
-  CheckCircle2,
   FileImage,
   FileText,
   History,
-  Image as ImageIcon,
   Info,
   Layers3,
-  Loader2,
   ScanLine,
   Sparkles,
   Trash2,
@@ -30,6 +27,7 @@ import { parseNotes } from '@/lib/ai';
 import { getInitialFSRSData } from '@/lib/fsrs';
 import { createMemoryPayload } from '@/lib/data/commands';
 import { getAutoExpireAt } from '@/lib/feedback';
+import { normalizeInputHistoryItem, normalizeInputHistoryWorkflow } from '@/lib/input-history';
 import { InputHistoryItem, IngestionMode, Resource, UserFeedbackEvent } from '@/lib/types';
 import { ModelSelector } from '@/components/ModelSelector';
 
@@ -39,6 +37,17 @@ type DraftAsset = {
   preview: string;
   type: string;
   size: number;
+};
+
+type ManualHighlightKind = 'mistake' | 'memory' | 'explain' | 'focus' | 'custom';
+
+type ManualHighlight = {
+  id: string;
+  scope: 'text' | 'image';
+  kind: ManualHighlightKind;
+  resourceId?: string;
+  note: string;
+  customLabel?: string;
 };
 
 type ReviewItem = {
@@ -110,6 +119,47 @@ const WORKFLOW_META: Record<IngestionMode, WorkflowMeta> = {
 
 const DEFAULT_FUNCTIONS = ['细碎记忆', '方法论', '关联型记忆', '系统型'];
 const DEFAULT_PURPOSES = ['记忆型', '内化型', '补充知识型', '系统型'];
+const MANUAL_HIGHLIGHT_ORDER: ManualHighlightKind[] = ['mistake', 'memory', 'explain', 'focus', 'custom'];
+const MANUAL_HIGHLIGHT_META: Record<
+  ManualHighlightKind,
+  { label: string; shortLabel: string; badgeClass: string; placeholder: string; promptLabel: string }
+> = {
+  mistake: {
+    label: '错题',
+    shortLabel: '错题',
+    badgeClass: 'border-rose-500/30 bg-rose-500/10 text-rose-200',
+    placeholder: '补充错题位置或范围，例如：第34题、左上角红叉题',
+    promptLabel: '错题',
+  },
+  memory: {
+    label: '添加记忆',
+    shortLabel: '记忆',
+    badgeClass: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+    placeholder: '补充要记住的内容，例如：定义、结论、易混点',
+    promptLabel: '加入记忆',
+  },
+  explain: {
+    label: '需要解释',
+    shortLabel: '解释',
+    badgeClass: 'border-amber-500/30 bg-amber-500/10 text-amber-100',
+    placeholder: '补充需要讲解的点，例如：为什么选 C、这一步怎么推',
+    promptLabel: '需要解释',
+  },
+  focus: {
+    label: '重点',
+    shortLabel: '重点',
+    badgeClass: 'border-sky-500/30 bg-sky-500/10 text-sky-100',
+    placeholder: '补充重点区域，例如：第二段定义、图中公式、圈出的单词',
+    promptLabel: '重点',
+  },
+  custom: {
+    label: '自定义',
+    shortLabel: '自定义',
+    badgeClass: 'border-violet-500/30 bg-violet-500/10 text-violet-100',
+    placeholder: '输入自定义标注说明，例如：保留原题、只做翻译、关注批改语气',
+    promptLabel: '自定义',
+  },
+};
 
 function createFeedbackEvent(
   partial: Omit<UserFeedbackEvent, 'id' | 'timestamp'>
@@ -223,11 +273,254 @@ function pickPrimaryPreview(assets: DraftAsset[]) {
   return assets.find((asset) => asset.type.startsWith('image/'))?.preview || assets[0]?.preview;
 }
 
+function normalizeManualHighlight(value: unknown): ManualHighlight | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+
+  const record = value as Record<string, unknown>;
+  const scope = record.scope === 'image' ? 'image' : 'text';
+  const kind = MANUAL_HIGHLIGHT_ORDER.includes(record.kind as ManualHighlightKind)
+    ? (record.kind as ManualHighlightKind)
+    : 'custom';
+
+  return {
+    id: toDisplayText(record.id) || uuidv4(),
+    scope,
+    kind,
+    resourceId: toDisplayText(record.resourceId) || undefined,
+    note: toDisplayText(record.note),
+    customLabel: toDisplayText(record.customLabel) || undefined,
+  };
+}
+
+function normalizeManualHighlights(value: unknown): ManualHighlight[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => normalizeManualHighlight(item))
+    .filter((item): item is ManualHighlight => Boolean(item));
+}
+
+function isSameManualHighlight(
+  current: ManualHighlight,
+  next: Omit<ManualHighlight, 'id'>
+) {
+  return (
+    current.scope === next.scope &&
+    current.kind === next.kind &&
+    (current.resourceId || '') === (next.resourceId || '') &&
+    current.note.trim() === next.note.trim() &&
+    (current.customLabel || '').trim() === (next.customLabel || '').trim()
+  );
+}
+
+function remapManualHighlightsToAssets(
+  highlights: ManualHighlight[],
+  previousResourceIds: string[],
+  restoredAssets: DraftAsset[]
+) {
+  if (highlights.length === 0 || restoredAssets.length === 0) return highlights;
+
+  const resourceIdMap = new Map<string, string>();
+  previousResourceIds.forEach((resourceId, index) => {
+    if (!resourceId) return;
+    const restoredResourceId = restoredAssets[index]?.resourceId;
+    if (restoredResourceId) {
+      resourceIdMap.set(resourceId, restoredResourceId);
+    }
+  });
+
+  const restoredResourceIds = new Set(restoredAssets.map((asset) => asset.resourceId));
+  const singleFallbackResourceId =
+    restoredAssets.length === 1 ? restoredAssets[0].resourceId : undefined;
+
+  return highlights.map((highlight) => {
+    if (highlight.scope !== 'image') return highlight;
+
+    const mappedResourceId =
+      (highlight.resourceId ? resourceIdMap.get(highlight.resourceId) : undefined) ||
+      (highlight.resourceId && restoredResourceIds.has(highlight.resourceId) ? highlight.resourceId : undefined) ||
+      singleFallbackResourceId;
+
+    if (!mappedResourceId || mappedResourceId === highlight.resourceId) {
+      return highlight;
+    }
+
+    return {
+      ...highlight,
+      resourceId: mappedResourceId,
+    };
+  });
+}
+
+function getManualHighlightLabel(highlight: ManualHighlight) {
+  if (highlight.kind === 'custom' && highlight.customLabel?.trim()) {
+    return highlight.customLabel.trim();
+  }
+
+  return MANUAL_HIGHLIGHT_META[highlight.kind].label;
+}
+
+function buildManualHighlightsInstruction(highlights: ManualHighlight[], assets: DraftAsset[]) {
+  if (highlights.length === 0) return '';
+
+  const assetNameMap = new Map(assets.map((asset) => [asset.resourceId, asset.name]));
+  const lines = ['【用户手动重点标注】'];
+
+  highlights.forEach((highlight, index) => {
+    const label = getManualHighlightLabel(highlight);
+    const note =
+      highlight.note.trim() ||
+      (highlight.scope === 'text'
+        ? '请结合当前文字内容按该标注优先处理。'
+        : '请结合该图片中的对应区域按该标注优先处理。');
+
+    if (highlight.scope === 'text') {
+      lines.push(`${index + 1}. 文本标注 [${label}]：${note}`);
+      return;
+    }
+
+    const assetName = assetNameMap.get(highlight.resourceId || '') || '未命名图片';
+    lines.push(`${index + 1}. 图片标注 [${assetName}] [${label}]：${note}`);
+  });
+
+  lines.push('请优先遵循以上手动标注，不要忽略用户明确指定的重点、错题、解释或自定义处理意图。');
+  return lines.join('\n');
+}
+
+function toDisplayText(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+
+  if (Array.isArray(value)) {
+    return value.map(toDisplayText).filter(Boolean).join('\n').trim();
+  }
+
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    for (const key of ['text', 'content', 'analysisProcess', 'analysis', 'message', 'value']) {
+      if (key in record) {
+        const normalized = toDisplayText(record[key]);
+        if (normalized) return normalized;
+      }
+    }
+
+    const flattened = Object.values(record).map(toDisplayText).filter(Boolean);
+    if (flattened.length > 0) return flattened.join('\n').trim();
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '';
+    }
+  }
+
+  return '';
+}
+
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => toStringArray(entry));
+  }
+
+  const normalized = toDisplayText(value);
+  return normalized ? [normalized] : [];
+}
+
+function normalizeVocabularyDetails(value: unknown): ReviewItem['vocabularyData'] | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+
+  const record = value as Record<string, unknown>;
+  const normalized = {
+    meaning: toDisplayText(record.meaning) || undefined,
+    usage: toDisplayText(record.usage) || undefined,
+    context: toDisplayText(record.context) || undefined,
+    mnemonics: toDisplayText(record.mnemonics) || undefined,
+    synonyms: Array.from(new Set(toStringArray(record.synonyms))),
+  };
+
+  if (
+    !normalized.meaning &&
+    !normalized.usage &&
+    !normalized.context &&
+    !normalized.mnemonics &&
+    normalized.synonyms.length === 0
+  ) {
+    return undefined;
+  }
+
+  return normalized;
+}
+
+function normalizeReviewItem(value: unknown): ReviewItem {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {
+      content: toDisplayText(value) || '未命名内容',
+    };
+  }
+
+  const record = value as Record<string, unknown>;
+  const type = record.type === 'concept' || record.type === 'qa' || record.type === 'vocabulary'
+    ? record.type
+    : undefined;
+
+  return {
+    content:
+      toDisplayText(record.content) ||
+      toDisplayText(record.notes) ||
+      toDisplayText(record.correctAnswer) ||
+      '未命名内容',
+    type,
+    questionType: toDisplayText(record.questionType) || undefined,
+    correctAnswer: toDisplayText(record.correctAnswer) || undefined,
+    notes: toDisplayText(record.notes) || undefined,
+    nodeIds: Array.from(new Set(toStringArray(record.nodeIds))),
+    isMistake: record.isMistake === true || toDisplayText(record.isMistake).toLowerCase() === 'true',
+    wrongAnswer: toDisplayText(record.wrongAnswer) || undefined,
+    errorReason: toDisplayText(record.errorReason) || undefined,
+    vocabularyData: normalizeVocabularyDetails(record.vocabularyData),
+    visualDescription: toDisplayText(record.visualDescription) || undefined,
+    functionType: toDisplayText(record.functionType) || undefined,
+    purposeType: toDisplayText(record.purposeType) || undefined,
+    source: toDisplayText(record.source) || undefined,
+    region: toDisplayText(record.region) || undefined,
+  };
+}
+
+function normalizePendingReviewState(
+  review: {
+    id: string;
+    workflow: IngestionMode;
+    parsedItems: unknown;
+    newNodes: unknown;
+    deletedNodeIds: unknown;
+    aiAnalysis: unknown;
+    identifiedSubject: unknown;
+    options: Record<string, unknown>;
+  },
+  fallbackSubject: string
+): PendingReview {
+  const parsedItems = (Array.isArray(review.parsedItems) ? review.parsedItems : [])
+    .map((item) => normalizeReviewItem(item))
+    .filter((item) => item.content);
+
+  return {
+    id: review.id,
+    workflow: review.workflow,
+    parsedItems,
+    newNodes: Array.isArray(review.newNodes) ? review.newNodes : [],
+    deletedNodeIds: Array.from(new Set(toStringArray(review.deletedNodeIds))),
+    aiAnalysis: toDisplayText(review.aiAnalysis),
+    identifiedSubject: toDisplayText(review.identifiedSubject) || fallbackSubject,
+    options: review.options || {},
+  };
+}
+
 export function InputSection() {
   const { state, dispatch } = useAppContext();
   const [workflow, setWorkflow] = useState<IngestionMode>('quick');
   const [input, setInput] = useState(state.draftInput || '');
   const [supplementaryInstruction, setSupplementaryInstruction] = useState('');
+  const [manualHighlights, setManualHighlights] = useState<ManualHighlight[]>([]);
   const [draftAssets, setDraftAssets] = useState<DraftAsset[]>([]);
   const [loading, setLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -244,6 +537,7 @@ export function InputSection() {
     extractVocabulary: true,
     prioritizeAccuracy: true,
   });
+  const inputTextareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -265,7 +559,11 @@ export function InputSection() {
   }, [dispatch, draftAssets, input]);
 
   const filteredHistory = useMemo(
-    () => state.inputHistory.filter((item) => item.subject === state.currentSubject),
+    () =>
+      (Array.isArray(state.inputHistory) ? state.inputHistory : [])
+        .map((item, index) => normalizeInputHistoryItem(item, state.currentSubject, index))
+        .filter((item): item is InputHistoryItem => Boolean(item))
+        .filter((item) => item.subject === state.currentSubject),
     [state.currentSubject, state.inputHistory]
   );
 
@@ -283,6 +581,65 @@ export function InputSection() {
         Boolean
       ),
     [state.memories]
+  );
+
+  const textHighlights = useMemo(
+    () => manualHighlights.filter((highlight) => highlight.scope === 'text'),
+    [manualHighlights]
+  );
+  const imageHighlightCount = useMemo(
+    () => manualHighlights.filter((highlight) => highlight.scope === 'image').length,
+    [manualHighlights]
+  );
+
+  const addManualHighlight = useCallback(
+    (scope: 'text' | 'image', kind: ManualHighlightKind, resourceId?: string) => {
+      let note = '';
+
+      if (scope === 'text' && inputTextareaRef.current) {
+        const element = inputTextareaRef.current;
+        const selectedText = input.slice(element.selectionStart || 0, element.selectionEnd || 0).trim();
+        note = selectedText;
+      }
+
+      const nextHighlight: Omit<ManualHighlight, 'id'> = {
+        scope,
+        kind,
+        resourceId,
+        note,
+        customLabel: kind === 'custom' ? '自定义' : undefined,
+      };
+
+      setManualHighlights((previous) => {
+        if (previous.some((highlight) => isSameManualHighlight(highlight, nextHighlight))) {
+          return previous;
+        }
+
+        return [
+          ...previous,
+          {
+            id: uuidv4(),
+            ...nextHighlight,
+          },
+        ];
+      });
+    },
+    [input]
+  );
+
+  const updateManualHighlight = useCallback((id: string, updates: Partial<ManualHighlight>) => {
+    setManualHighlights((previous) =>
+      previous.map((highlight) => (highlight.id === id ? { ...highlight, ...updates } : highlight))
+    );
+  }, []);
+
+  const removeManualHighlight = useCallback((id: string) => {
+    setManualHighlights((previous) => previous.filter((highlight) => highlight.id !== id));
+  }, []);
+
+  const getImageHighlights = useCallback(
+    (resourceId: string) => manualHighlights.filter((highlight) => highlight.scope === 'image' && highlight.resourceId === resourceId),
+    [manualHighlights]
   );
 
   const addAssetFromFile = useCallback(
@@ -387,7 +744,11 @@ export function InputSection() {
 
       const sessionId = pendingReview?.id || uuidv4();
       const options = workflow === 'quick' ? {} : imageOptions;
-      const workflowInstruction = buildWorkflowInstruction(workflow, options, supplementaryInstruction);
+      const manualHighlightsInstruction = buildManualHighlightsInstruction(manualHighlights, draftAssets);
+      const combinedSupplementaryInstruction = [supplementaryInstruction.trim(), manualHighlightsInstruction]
+        .filter(Boolean)
+        .join('\n\n');
+      const workflowInstruction = buildWorkflowInstruction(workflow, options, combinedSupplementaryInstruction);
       const prompt = [workflowInstruction, input.trim()].filter(Boolean).join('\n\n');
       const existingFunctionTypes = functionOptions.length > 0 ? functionOptions : DEFAULT_FUNCTIONS;
       const existingPurposeTypes = purposeOptions.length > 0 ? purposeOptions : DEFAULT_PURPOSES;
@@ -403,7 +764,7 @@ export function InputSection() {
           explicitFunction !== 'auto' ? explicitFunction : undefined,
           explicitPurpose !== 'auto' ? explicitPurpose : undefined,
           regenerate ? pendingReview?.parsedItems : undefined,
-          regenerate ? pendingReview?.aiAnalysis : undefined,
+          regenerate ? toDisplayText(pendingReview?.aiAnalysis) : undefined,
           existingFunctionTypes,
           existingPurposeTypes,
           (log) => {
@@ -438,7 +799,10 @@ export function InputSection() {
           deletedNodeIds: parsed.deletedNodeIds,
           aiAnalysis: parsed.analysisProcess,
           identifiedSubject: parsed.identifiedSubject,
-          options,
+          options: {
+            ...options,
+            manualHighlights,
+          },
         };
 
         dispatch({ type: 'ADD_INPUT_HISTORY', payload: historyItem });
@@ -452,25 +816,31 @@ export function InputSection() {
               targetId: sessionId,
               signalType: 'ingestion_regenerated',
               sentiment: 'neutral',
-              note: supplementaryInstruction.trim() || undefined,
+              note: combinedSupplementaryInstruction || undefined,
               metadata: {
                 workflow,
                 imageCount: draftAssets.length,
+                manualHighlightCount: manualHighlights.length,
               },
             }),
           });
         }
 
-        setPendingReview({
-          id: sessionId,
-          workflow,
-          parsedItems: parsed.parsedItems as ReviewItem[],
-          newNodes: parsed.newNodes,
-          deletedNodeIds: parsed.deletedNodeIds,
-          aiAnalysis: parsed.analysisProcess,
-          identifiedSubject: parsed.identifiedSubject,
-          options,
-        });
+        setPendingReview(
+          normalizePendingReviewState(
+            {
+              id: sessionId,
+              workflow,
+              parsedItems: parsed.parsedItems,
+              newNodes: parsed.newNodes,
+              deletedNodeIds: parsed.deletedNodeIds,
+              aiAnalysis: parsed.analysisProcess,
+              identifiedSubject: parsed.identifiedSubject,
+              options,
+            },
+            parsed.identifiedSubject || state.currentSubject
+          )
+        );
       } catch (error: any) {
         console.error('Failed to parse notes:', error);
         alert(`解析失败：${error?.message || '未知错误'}`);
@@ -485,6 +855,7 @@ export function InputSection() {
       functionOptions,
       imageOptions,
       input,
+      manualHighlights,
       pendingReview,
       purposeOptions,
       selectedModel,
@@ -518,7 +889,8 @@ export function InputSection() {
       const now = Date.now();
 
       const memories = items
-        .map((item) => {
+        .map((rawItem) => {
+          const item = normalizeReviewItem(rawItem);
           const memoryId = uuidv4();
           const memoryResult = createMemoryPayload({
             id: memoryId,
@@ -544,7 +916,7 @@ export function InputSection() {
             wrongAnswer: item.wrongAnswer,
             errorReason: item.errorReason,
             visualDescription: item.visualDescription,
-            analysisProcess: pendingReview.aiAnalysis,
+            analysisProcess: toDisplayText(pendingReview.aiAnalysis),
             fsrs: getInitialFSRSData(),
             type: item.type,
             vocabularyData: item.vocabularyData,
@@ -579,6 +951,7 @@ export function InputSection() {
             workflow: pendingReview.workflow,
             memoryCount: memories.length,
             imageCount: draftAssets.length,
+            manualHighlightCount: manualHighlights.length,
           },
         }),
       });
@@ -610,6 +983,7 @@ export function InputSection() {
       setPendingReview(null);
       setInput('');
       setSupplementaryInstruction('');
+      setManualHighlights([]);
       setDraftAssets([]);
       setMarkAsMistake(false);
       dispatch({ type: 'UPDATE_DRAFT', payload: { draftInput: '', draftImages: [] } });
@@ -620,6 +994,7 @@ export function InputSection() {
       explicitFunction,
       explicitPurpose,
       markAsMistake,
+      manualHighlights.length,
       pendingReview,
       state.currentSubject,
       state.resources,
@@ -628,6 +1003,9 @@ export function InputSection() {
 
   const removeDraftAsset = useCallback((resourceId: string) => {
     setDraftAssets((previous) => previous.filter((asset) => asset.resourceId !== resourceId));
+    setManualHighlights((previous) =>
+      previous.filter((highlight) => !(highlight.scope === 'image' && highlight.resourceId === resourceId))
+    );
   }, []);
 
   const handleDrop = useCallback(
@@ -642,36 +1020,64 @@ export function InputSection() {
   );
 
   const restoreHistoryItem = useCallback((item: InputHistoryItem) => {
-    setWorkflow(item.workflow);
-    setInput(item.input);
-    setSupplementaryInstruction(item.supplementaryInstruction || '');
-    setDraftAssets(
-      (item.images || []).map((image, index) => ({
-        resourceId: item.imageResourceIds?.[index] || uuidv4(),
+    const normalizedItem = normalizeInputHistoryItem(item, state.currentSubject) || item;
+    const restoredAssets = (normalizedItem.images || []).map((image, index) => {
+      const preview = toDisplayText(image);
+      return {
+        resourceId: normalizedItem.imageResourceIds?.[index] || uuidv4(),
         name: `Restored-${index + 1}`,
-        preview: image,
-        type: image.startsWith('data:image') ? 'image/*' : 'application/octet-stream',
+        preview,
+        type: preview.startsWith('data:image') ? 'image/*' : 'application/octet-stream',
         size: 0,
-      }))
-    );
-    setPendingReview({
-      id: item.id,
-      workflow: item.workflow,
-      parsedItems: item.parsedItems as ReviewItem[],
-      newNodes: item.newNodes,
-      deletedNodeIds: item.deletedNodeIds,
-      aiAnalysis: item.aiAnalysis,
-      identifiedSubject: item.identifiedSubject,
-      options: item.options || {},
+      };
     });
+    const restoredManualHighlights = remapManualHighlightsToAssets(
+      normalizeManualHighlights(normalizedItem.options?.manualHighlights),
+      normalizedItem.imageResourceIds || [],
+      restoredAssets
+    );
+
+    setWorkflow(
+      normalizeInputHistoryWorkflow(
+        normalizedItem.workflow,
+        normalizedItem.images?.length || 0,
+        normalizedItem.parsedItems?.length || 0
+      )
+    );
+    setInput(toDisplayText(normalizedItem.input));
+    setSupplementaryInstruction(toDisplayText(normalizedItem.supplementaryInstruction));
+    setManualHighlights(restoredManualHighlights);
+    setDraftAssets(restoredAssets);
+    setPendingReview(
+      normalizePendingReviewState(
+        {
+          id: normalizedItem.id,
+          workflow: normalizeInputHistoryWorkflow(
+            normalizedItem.workflow,
+            normalizedItem.images?.length || 0,
+            normalizedItem.parsedItems?.length || 0
+          ),
+          parsedItems: normalizedItem.parsedItems,
+          newNodes: normalizedItem.newNodes,
+          deletedNodeIds: normalizedItem.deletedNodeIds,
+          aiAnalysis: normalizedItem.aiAnalysis,
+          identifiedSubject: normalizedItem.identifiedSubject,
+          options: {
+            ...(normalizedItem.options || {}),
+            manualHighlights: restoredManualHighlights,
+          },
+        },
+        toDisplayText(normalizedItem.identifiedSubject) || state.currentSubject
+      )
+    );
     setShowHistory(false);
-  }, []);
+  }, [state.currentSubject]);
 
   const activeMeta = WORKFLOW_META[workflow];
 
   if (loading) {
     return (
-      <div className="max-w-6xl mx-auto p-6">
+      <div className="w-full p-4 md:p-6 xl:px-8">
         <div className="min-h-[420px] rounded-3xl border border-slate-800 bg-slate-950 flex flex-col items-center justify-center text-center p-8">
           <div className="relative mb-8">
             <div className="h-20 w-20 rounded-full border-4 border-indigo-500/20 border-t-indigo-500 animate-spin" />
@@ -689,7 +1095,7 @@ export function InputSection() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-6 text-slate-200">
+    <div className="w-full p-4 md:p-6 xl:px-8 space-y-5 text-slate-200">
       <div className="rounded-3xl border border-slate-800 bg-slate-950 p-4 md:p-6 shadow-2xl">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
@@ -717,7 +1123,7 @@ export function InputSection() {
           </button>
         </div>
 
-        <div className="mt-5 grid gap-3 md:grid-cols-3">
+        <div className="mt-5 grid gap-2 md:grid-cols-3">
           {(Object.keys(WORKFLOW_META) as IngestionMode[]).map((mode) => {
             const meta = WORKFLOW_META[mode];
             const Icon = meta.icon;
@@ -726,7 +1132,7 @@ export function InputSection() {
               <button
                 key={mode}
                 onClick={() => setWorkflow(mode)}
-                className={clsx('rounded-2xl border p-4 text-left transition-all', modeBadgeClass(mode, workflow === mode))}
+                className={clsx('rounded-2xl border p-3.5 text-left transition-all', modeBadgeClass(mode, workflow === mode))}
               >
                 <div className="flex items-center gap-3 mb-3">
                   <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-black/20">
@@ -737,10 +1143,21 @@ export function InputSection() {
                     <div className="text-xs text-slate-400 mt-1">{meta.subtitle}</div>
                   </div>
                 </div>
-                <p className="text-xs leading-6 text-slate-400">{meta.hint}</p>
               </button>
             );
           })}
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <span className="rounded-full border border-slate-800 bg-slate-900 px-3 py-1 text-xs text-slate-300">
+            当前模式：{activeMeta.label}
+          </span>
+          <span className="rounded-full border border-slate-800 bg-slate-900 px-3 py-1 text-xs text-slate-400">
+            图片先入资源库，{state.settings.resourceAutoCleanupDays || 21} 天后自动清理未固定素材
+          </span>
+          <span className="rounded-full border border-slate-800 bg-slate-900 px-3 py-1 text-xs text-slate-400">
+            重生成、编辑和对话反馈会反向学习你的偏好
+          </span>
         </div>
 
         {showHistory && (
@@ -763,12 +1180,18 @@ export function InputSection() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] uppercase tracking-widest text-slate-400">
-                            {WORKFLOW_META[item.workflow].label}
+                            {WORKFLOW_META[
+                              normalizeInputHistoryWorkflow(
+                                item.workflow,
+                                item.images?.length || 0,
+                                item.parsedItems?.length || 0
+                              )
+                            ].label}
                           </span>
                           <span className="text-[11px] text-slate-600">{new Date(item.timestamp).toLocaleString()}</span>
                         </div>
                         <div className="truncate text-sm text-slate-200">
-                          {item.input || `图片录入，共 ${item.images.length} 张素材`}
+                          {toDisplayText(item.input) || `图片录入，共 ${item.images.length} 张素材`}
                         </div>
                       </div>
                       <Trash2
@@ -799,9 +1222,9 @@ export function InputSection() {
           isDragging ? 'border-indigo-500/40 bg-indigo-500/5' : 'border-slate-800 bg-slate-950'
         )}
       >
-        <div className="grid gap-6 lg:grid-cols-[1.7fr_1fr]">
+        <div className="space-y-4">
           <div className="space-y-4">
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 md:p-6">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
                 <div>
                   <div className="text-sm font-semibold text-white">{activeMeta.label}</div>
@@ -817,6 +1240,7 @@ export function InputSection() {
               </div>
 
               <textarea
+                ref={inputTextareaRef}
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 placeholder={
@@ -826,14 +1250,94 @@ export function InputSection() {
                       ? '可补充说明图片中的重点、疑问、批注含义或希望优先提取的区域。'
                       : '描述这套试卷/作业的背景，例如月考、作业订正、专题训练等。'
                 }
-                className="h-40 w-full resize-none rounded-2xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-200 outline-none focus:border-indigo-500"
+                className="min-h-[360px] w-full resize-y rounded-2xl border border-slate-800 bg-slate-950 p-4 text-sm leading-7 text-slate-200 outline-none focus:border-indigo-500 md:min-h-[460px]"
               />
+
+              <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-white">手动重点标注</div>
+                    <div className="mt-1 text-xs leading-6 text-slate-500">
+                      文字可先选中再点标签；图片可在素材卡片里单独标为错题、添加记忆、需要解释或自定义重点。
+                    </div>
+                  </div>
+                  <div className="rounded-full border border-slate-800 bg-slate-900 px-3 py-1 text-xs text-slate-400">
+                    当前 {manualHighlights.length} 条标注 · 文本 {textHighlights.length} · 图片 {imageHighlightCount}
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {MANUAL_HIGHLIGHT_ORDER.map((kind) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => addManualHighlight('text', kind)}
+                      className={clsx(
+                        'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                        MANUAL_HIGHLIGHT_META[kind].badgeClass
+                      )}
+                    >
+                      文本标为{MANUAL_HIGHLIGHT_META[kind].shortLabel}
+                    </button>
+                  ))}
+                </div>
+
+                {textHighlights.length > 0 && (
+                  <div className="mt-4 space-y-3">
+                    {textHighlights.map((highlight) => (
+                      <div key={highlight.id} className="rounded-2xl border border-slate-800 bg-slate-900/60 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={clsx(
+                                'rounded-full border px-2.5 py-1 text-[11px] font-medium',
+                                MANUAL_HIGHLIGHT_META[highlight.kind].badgeClass
+                              )}
+                            >
+                              {getManualHighlightLabel(highlight)}
+                            </span>
+                            <span className="text-[11px] uppercase tracking-widest text-slate-500">文本标注</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeManualHighlight(highlight.id)}
+                            className="rounded-lg p-1 text-slate-500 hover:bg-slate-800 hover:text-rose-400"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+
+                        {highlight.kind === 'custom' && (
+                          <input
+                            value={highlight.customLabel || ''}
+                            onChange={(event) =>
+                              updateManualHighlight(highlight.id, { customLabel: event.target.value })
+                            }
+                            placeholder="自定义标签名，例如：保留原题 / 只做翻译"
+                            className="mt-3 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none focus:border-violet-500"
+                          />
+                        )}
+
+                        <input
+                          value={highlight.note}
+                          onChange={(event) =>
+                            updateManualHighlight(highlight.id, { note: event.target.value })
+                          }
+                          placeholder={MANUAL_HIGHLIGHT_META[highlight.kind].placeholder}
+                          className="mt-3 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               <textarea
                 value={supplementaryInstruction}
                 onChange={(event) => setSupplementaryInstruction(event.target.value)}
                 placeholder="补充处理要求，例如：只提取打叉题目、保留原题条件、把用户问号当作待讲解点。"
-                className="mt-3 h-24 w-full resize-none rounded-2xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-300 outline-none focus:border-indigo-500"
+                className="mt-3 h-20 w-full resize-none rounded-2xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-300 outline-none focus:border-indigo-500"
               />
             </div>
 
@@ -975,6 +1479,71 @@ export function InputSection() {
                           </div>
                         )}
                       </div>
+
+                      <div className="mt-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+                        <div className="text-[11px] uppercase tracking-widest text-slate-500">图片重点标注</div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {MANUAL_HIGHLIGHT_ORDER.map((kind) => (
+                            <button
+                              key={`${asset.resourceId}-${kind}`}
+                              type="button"
+                              onClick={() => addManualHighlight('image', kind, asset.resourceId)}
+                              className={clsx(
+                                'rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors',
+                                MANUAL_HIGHLIGHT_META[kind].badgeClass
+                              )}
+                            >
+                              {MANUAL_HIGHLIGHT_META[kind].shortLabel}
+                            </button>
+                          ))}
+                        </div>
+
+                        {getImageHighlights(asset.resourceId).length > 0 && (
+                          <div className="mt-3 space-y-2">
+                            {getImageHighlights(asset.resourceId).map((highlight) => (
+                              <div key={highlight.id} className="rounded-xl border border-slate-800 bg-slate-950 p-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span
+                                    className={clsx(
+                                      'rounded-full border px-2 py-0.5 text-[10px] font-medium',
+                                      MANUAL_HIGHLIGHT_META[highlight.kind].badgeClass
+                                    )}
+                                  >
+                                    {getManualHighlightLabel(highlight)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeManualHighlight(highlight.id)}
+                                    className="rounded-lg p-1 text-slate-500 hover:bg-slate-800 hover:text-rose-400"
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+
+                                {highlight.kind === 'custom' && (
+                                  <input
+                                    value={highlight.customLabel || ''}
+                                    onChange={(event) =>
+                                      updateManualHighlight(highlight.id, { customLabel: event.target.value })
+                                    }
+                                    placeholder="自定义标签名"
+                                    className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-200 outline-none focus:border-violet-500"
+                                  />
+                                )}
+
+                                <input
+                                  value={highlight.note}
+                                  onChange={(event) =>
+                                    updateManualHighlight(highlight.id, { note: event.target.value })
+                                  }
+                                  placeholder={MANUAL_HIGHLIGHT_META[highlight.kind].placeholder}
+                                  className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -995,34 +1564,40 @@ export function InputSection() {
             </button>
           </div>
 
-          <div className="space-y-4">
-            <div className="rounded-2xl border border-slate-800 bg-slate-950 p-4">
-              <div className="flex items-center gap-2 mb-3">
+          <details className="rounded-2xl border border-slate-800 bg-slate-950">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-white">
+              <span className="flex items-center gap-2">
                 <Info className="h-4 w-4 text-indigo-400" />
+                日志与 AI 偏好学习
+              </span>
+              <span className="text-xs font-normal text-slate-500">按需展开</span>
+            </summary>
+            <div className="grid gap-4 border-t border-slate-800 px-4 py-4 md:grid-cols-2">
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
                 <div className="text-sm font-semibold text-white">本流程会记录什么</div>
+                <ul className="mt-3 space-y-2 text-sm leading-7 text-slate-400">
+                  <li>解析日志会附带工作流、学科、资源关联，便于后续导出优化包。</li>
+                  <li>图片默认进入资源库，未固定旧素材将按规则自动清理。</li>
+                  <li>重生成、编辑、删除和对话反馈会反向沉淀为 AI 注意事项。</li>
+                </ul>
               </div>
-              <ul className="space-y-2 text-sm leading-7 text-slate-400">
-                <li>解析日志会附带工作流、学科、资源关联，便于后续导出优化包。</li>
-                <li>图片默认进入资源库，未固定旧素材将按规则自动清理。</li>
-                <li>你的重生成、编辑、删除和对话反馈会反向沉淀为 AI 注意事项。</li>
-              </ul>
-            </div>
 
-            <div className="rounded-2xl border border-slate-800 bg-slate-950 p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <AlertCircle className="h-4 w-4 text-amber-400" />
-                <div className="text-sm font-semibold text-white">AI 当前注意点</div>
-              </div>
-              <div className="space-y-3 text-sm leading-7 text-slate-400">
-                <p>{state.settings.aiAttentionNotes || '暂未设置。'}</p>
-                {state.settings.feedbackLearningNotes && (
-                  <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300 whitespace-pre-wrap">
-                    {state.settings.feedbackLearningNotes}
-                  </div>
-                )}
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-amber-400" />
+                  <div className="text-sm font-semibold text-white">AI 当前注意点</div>
+                </div>
+                <div className="mt-3 space-y-3 text-sm leading-7 text-slate-400">
+                  <p>{toDisplayText(state.settings.aiAttentionNotes) || '暂未设置。'}</p>
+                  {state.settings.feedbackLearningNotes && (
+                    <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-300 whitespace-pre-wrap">
+                      {toDisplayText(state.settings.feedbackLearningNotes)}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
+          </details>
         </div>
       </div>
 
@@ -1062,7 +1637,7 @@ export function InputSection() {
             <div className="text-xs uppercase tracking-widest text-slate-500 mb-2">AI 分析过程</div>
             <div className="prose prose-invert prose-sm max-w-none text-slate-300">
               <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                {pendingReview.aiAnalysis || '暂无分析说明。'}
+                {toDisplayText(pendingReview.aiAnalysis) || '暂无分析说明。'}
               </Markdown>
             </div>
           </div>
@@ -1188,16 +1763,6 @@ export function InputSection() {
         </div>
       )}
 
-      <div className="rounded-3xl border border-emerald-500/20 bg-emerald-500/5 p-4 md:p-5">
-        <div className="flex items-center gap-2 mb-3 text-emerald-200">
-          <CheckCircle2 className="h-4 w-4" />
-          <div className="text-sm font-semibold">为了后续让我更好地帮你优化</div>
-        </div>
-        <div className="space-y-2 text-sm leading-7 text-emerald-50/90">
-          <p>在“AI 日志”里可以直接导出优化包，包含日志、录入历史、低质量记忆、反馈事件和相关图片资料。</p>
-          <p>你对结果进行重生成、编辑记忆、删除不准内容或评价对话后，系统会自动学习这些偏好并更新 AI 注意事项。</p>
-        </div>
-      </div>
     </div>
   );
 }

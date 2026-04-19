@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AppProvider, useAppContext } from '../lib/store';
 import { GlobalAIChatProvider } from '../lib/ai-chat-context';
 import { GlobalAIPanel } from '../components/GlobalAIPanel';
@@ -17,11 +17,11 @@ import { ReviewSection } from '../components/ReviewSection';
 import { TextbookModule } from '../components/TextbookModule';
 import { ResourceLibrary } from '../components/ResourceLibrary';
 import { clsx } from 'clsx';
-import { useEffect } from 'react';
 
 function MainLayout({ currentView, setCurrentView }: { currentView: View, setCurrentView: (v: View) => void }) {
   const { state } = useAppContext();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [mountedViews, setMountedViews] = useState<View[]>(['dashboard']);
 
   useEffect(() => {
     const fontSizeMap: Record<string, string> = {
@@ -34,6 +34,42 @@ function MainLayout({ currentView, setCurrentView }: { currentView: View, setCur
     document.documentElement.style.setProperty('--base-font-size', fontSize);
   }, [state.settings.fontSize]);
 
+  useEffect(() => {
+    setMountedViews((previous) => (previous.includes(currentView) ? previous : [...previous, currentView]));
+  }, [currentView]);
+
+  const viewOrder = useMemo<View[]>(
+    () => ['dashboard', 'textbooks', 'resources', 'input', 'graph', 'memory', 'mistakes', 'review', 'chat', 'settings'],
+    []
+  );
+
+  const renderView = (view: View) => {
+    switch (view) {
+      case 'dashboard':
+        return <Dashboard />;
+      case 'textbooks':
+        return <TextbookModule />;
+      case 'resources':
+        return <ResourceLibrary />;
+      case 'input':
+        return <InputSection />;
+      case 'graph':
+        return <KnowledgeGraph />;
+      case 'memory':
+        return <MemoryBank />;
+      case 'mistakes':
+        return <MistakeBook />;
+      case 'review':
+        return <ReviewSection />;
+      case 'chat':
+        return <AIChat />;
+      case 'settings':
+        return <Settings />;
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="flex h-screen bg-black font-sans overflow-hidden text-slate-200">
       <Sidebar 
@@ -44,21 +80,24 @@ function MainLayout({ currentView, setCurrentView }: { currentView: View, setCur
       />
       <main className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
         <SubjectSelector onMenuClick={() => setIsMobileMenuOpen(true)} />
-        <div className="flex-1 overflow-y-auto relative">
-          {currentView === 'dashboard' && <Dashboard />}
-          {currentView === 'textbooks' && <TextbookModule />}
-          {currentView === 'resources' && <ResourceLibrary />}
-          {currentView === 'input' && (
-            <div className="max-w-6xl mx-auto h-full">
-              <InputSection />
-            </div>
-          )}
-          {currentView === 'graph' && <KnowledgeGraph />}
-          {currentView === 'memory' && <MemoryBank />}
-          {currentView === 'mistakes' && <MistakeBook />}
-          {currentView === 'review' && <ReviewSection />}
-          {currentView === 'chat' && <AIChat />}
-          {currentView === 'settings' && <Settings />}
+        <div className="flex-1 relative overflow-hidden">
+          {viewOrder.map((view) => {
+            if (!mountedViews.includes(view)) return null;
+
+            const isActive = currentView === view;
+            return (
+              <section
+                key={view}
+                aria-hidden={!isActive}
+                className={clsx(
+                  'absolute inset-0 overflow-y-auto',
+                  isActive ? 'block' : 'hidden'
+                )}
+              >
+                <div className="min-h-full">{renderView(view)}</div>
+              </section>
+            );
+          })}
         </div>
       </main>
     </div>

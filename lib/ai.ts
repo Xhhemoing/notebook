@@ -68,7 +68,7 @@ export async function getEmbedding(
     });
     if (!response.ok) {
       const err = await response.text();
-      throw new Error(`AI Proxy (Embedding) error: ${err}`);
+      throw new Error(`AI Proxy (Embedding) error: ${summarizeProxyError(err)}`);
     }
     const data = await response.json();
     return data.data[0].embedding;
@@ -641,17 +641,18 @@ async function fetchOpenAI(customModel: CustomModel, prompt: string, base64Image
     const contentType = response.headers.get('content-type');
     if (contentType && contentType.includes('application/json')) {
       const error = await response.json();
-      throw new Error(`AI Proxy error: ${error.error || 'Unknown error'}`);
+      const details = [error.error, error.details].filter(Boolean).join(' | ');
+      throw new Error(`AI Proxy error: ${summarizeProxyError(details) || 'Unknown error'}`);
     } else {
       const text = await response.text();
-      throw new Error(`AI Proxy error: ${response.status} ${text.substring(0, 100)}`);
+      throw new Error(`AI Proxy error: ${response.status} ${summarizeProxyError(text)}`);
     }
   }
 
   const contentType = response.headers.get('content-type');
   if (!contentType || !contentType.includes('application/json')) {
     const text = await response.text();
-    throw new Error(`AI Proxy expected JSON but got ${contentType}: ${text.substring(0, 100)}`);
+    throw new Error(`AI Proxy expected JSON but got ${contentType}: ${summarizeProxyError(text)}`);
   }
 
   const data = await response.json();
@@ -682,6 +683,193 @@ const getNodeDetailsTool: FunctionDeclaration = {
     required: ["node_id"]
   }
 };
+
+function normalizeAIText(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+
+  if (Array.isArray(value)) {
+    return value.map(normalizeAIText).filter(Boolean).join('\n').trim();
+  }
+
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const preferredKeys = ['text', 'content', 'analysisProcess', 'analysis', 'message', 'value'];
+
+    for (const key of preferredKeys) {
+      if (key in record) {
+        const normalized = normalizeAIText(record[key]);
+        if (normalized) return normalized;
+      }
+    }
+
+    const flattened = Object.values(record).map(normalizeAIText).filter(Boolean);
+    if (flattened.length > 0) return flattened.join('\n').trim();
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '';
+    }
+  }
+
+  return '';
+}
+
+function stripHtmlTags(value: string) {
+  return value
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function summarizeProxyError(value: unknown, fallback = 'Unknown error') {
+  if (typeof value !== 'string') return fallback;
+  const text = value.trim();
+  if (!text) return fallback;
+  if (text.startsWith('<!DOCTYPE html') || text.startsWith('<html')) {
+    return stripHtmlTags(text).slice(0, 200) || 'Received an HTML error page';
+  }
+  return text.slice(0, 200);
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => normalizeStringArray(entry));
+  }
+
+  const normalized = normalizeAIText(value);
+  return normalized ? [normalized] : [];
+}
+
+function normalizeBoolean(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return ['true', '1', 'yes', 'y', '是', '对', '有'].includes(normalized);
+  }
+
+  return false;
+}
+
+function normalizeVocabularyData(value: unknown) {
+  if (!value || typeof value !== 'object') return undefined;
+
+  const record = value as Record<string, unknown>;
+  const normalized = {
+    context: normalizeAIText(record.context) || undefined,
+    meaning: normalizeAIText(record.meaning) || undefined,
+    usage: normalizeAIText(record.usage) || undefined,
+    mnemonics: normalizeAIText(record.mnemonics) || undefined,
+    synonyms: Array.from(new Set(normalizeStringArray(record.synonyms))),
+  };
+
+  if (
+    !normalized.context &&
+    !normalized.meaning &&
+    !normalized.usage &&
+    !normalized.mnemonics &&
+    normalized.synonyms.length === 0
+  ) {
+    return undefined;
+  }
+
+  return normalized;
+}
+
+function normalizeParsedType(value: unknown, hasVocabularyData: boolean): 'concept' | 'qa' | 'vocabulary' | undefined {
+  const normalized = normalizeAIText(value).toLowerCase();
+
+  if (['qa', 'question', 'mistake'].includes(normalized)) return 'qa';
+  if (['vocabulary', 'word', 'phrase'].includes(normalized)) return 'vocabulary';
+  if (['concept', 'knowledge', 'note'].includes(normalized)) return 'concept';
+
+  if (hasVocabularyData) return 'vocabulary';
+  return undefined;
+}
+
+function normalizeSuggestedNodes(value: unknown): Array<{ name: string; parentId: string | null; testingMethods: string[] }> {
+  const entries = Array.isArray(value) ? value : value ? [value] : [];
+
+  return entries.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+
+    const record = entry as Record<string, unknown>;
+    const name = normalizeAIText(record.name);
+    if (!name) return [];
+
+    return [
+      {
+        name,
+        parentId: normalizeAIText(record.parentId) || null,
+        testingMethods: Array.from(new Set(normalizeStringArray(record.testingMethods))),
+      },
+    ];
+  });
+}
+
+function normalizeParsedItem(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    const content = normalizeAIText(value);
+    if (!content) return null;
+
+    return {
+      content,
+      type: 'concept' as const,
+      suggestedNodeIds: [] as string[],
+      newNodes: [] as Array<{ name: string; parentId: string | null; testingMethods: string[] }>,
+      deletedNodeIds: [] as string[],
+      isMistake: false,
+    };
+  }
+
+  const record = value as Record<string, unknown>;
+  const vocabularyData = normalizeVocabularyData(record.vocabularyData);
+  const type = normalizeParsedType(record.type, Boolean(vocabularyData));
+
+  const normalized = {
+    content:
+      normalizeAIText(record.content) ||
+      normalizeAIText(record.notes) ||
+      normalizeAIText(record.correctAnswer) ||
+      vocabularyData?.meaning ||
+      '',
+    type:
+      type ||
+      (normalizeAIText(record.correctAnswer) || normalizeAIText(record.questionType) || normalizeBoolean(record.isMistake)
+        ? ('qa' as const)
+        : ('concept' as const)),
+    correctAnswer: normalizeAIText(record.correctAnswer) || undefined,
+    questionType: normalizeAIText(record.questionType) || undefined,
+    suggestedNodeIds: Array.from(new Set(normalizeStringArray(record.suggestedNodeIds))),
+    newNodes: normalizeSuggestedNodes(record.newNodes),
+    deletedNodeIds: Array.from(new Set(normalizeStringArray(record.deletedNodeIds))),
+    isMistake: normalizeBoolean(record.isMistake),
+    wrongAnswer: normalizeAIText(record.wrongAnswer) || undefined,
+    errorReason: normalizeAIText(record.errorReason) || undefined,
+    vocabularyData,
+    notes: normalizeAIText(record.notes) || undefined,
+    visualDescription: normalizeAIText(record.visualDescription) || undefined,
+    functionType: normalizeAIText(record.functionType) || undefined,
+    purposeType: normalizeAIText(record.purposeType) || undefined,
+    source: normalizeAIText(record.source) || undefined,
+    region: normalizeAIText(record.region) || undefined,
+    collectionName: normalizeAIText(record.collectionName) || undefined,
+  };
+
+  return normalized.content ? normalized : null;
+}
+
+function normalizeParsedItems(value: unknown) {
+  const entries = Array.isArray(value) ? value : value ? [value] : [];
+  return entries
+    .map((entry) => normalizeParsedItem(entry))
+    .filter(Boolean);
+}
 
 export async function parseNotes(
   input: string,
@@ -907,11 +1095,21 @@ ${input || '请分析图片中的作业和标记'}
     result = { items: [], analysisProcess: '解析AI响应失败，请重试', identifiedSubject: subject };
   }
   
+  const normalizedAnalysisProcess =
+    normalizeAIText(result.analysisProcess ?? result.analysis) || '解析完成';
+  const normalizedIdentifiedSubject =
+    normalizeAIText(result.identifiedSubject ?? result.subject) || subject;
+
   // Process new nodes to assign hierarchical IDs
   const finalNewNodes: KnowledgeNode[] = [];
-  const finalDeletedNodeIds: string[] = result.deletedNodeIds || [];
+  const items = normalizeParsedItems(result.items);
+  const finalDeletedNodeIds = Array.from(
+    new Set([
+      ...normalizeStringArray(result.deletedNodeIds),
+      ...items.flatMap((item: any) => item.deletedNodeIds || []),
+    ])
+  );
 
-  const items = result.items || [];
   const processedItems = items.map((item: any) => {
     const nodeIds = [...(item.suggestedNodeIds || [])];
     const collectionName = item.collectionName || (item.type === 'vocabulary' ? '词汇本' : undefined);
@@ -967,11 +1165,11 @@ ${input || '请分析图片中的作业和标记'}
   });
 
   return {
-    analysisProcess: result.analysisProcess || '解析完成',
+    analysisProcess: normalizedAnalysisProcess,
     parsedItems: processedItems,
     newNodes: finalNewNodes,
     deletedNodeIds: finalDeletedNodeIds,
-    identifiedSubject: result.identifiedSubject || subject
+    identifiedSubject: normalizedIdentifiedSubject
   };
 }
 

@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { deleteDB, openDB } from 'idb';
 import { evaluateMemoryQuality, MEMORY_QUALITY_RULE_VERSION, normalizeKnowledgeNodes } from './data/quality';
 import { applyDataRetention, normalizeResourceRetention } from './feedback';
+import { normalizeInputHistoryItems, normalizeInputHistoryItem } from './input-history';
 
 const DB_NAME = 'gaokao-ai-db';
 const STORE_NAME = 'app-state';
@@ -666,7 +667,10 @@ function reducer(state: AppState, action: Action): AppState {
         feedbackEvents: action.payload.feedbackEvents || [],
         textbooks: action.payload.textbooks || [],
         reviewPlans: action.payload.reviewPlans || [],
-        inputHistory: action.payload.inputHistory || [],
+        inputHistory: normalizeInputHistoryItems(
+          action.payload.inputHistory,
+          action.payload.currentSubject || initialState.currentSubject
+        ),
         resources: action.payload.resources || [],
         links: action.payload.links || []
       });
@@ -695,9 +699,22 @@ function reducer(state: AppState, action: Action): AppState {
       if (!state.lastNodesState) return state;
       return finalizeState({ ...state, knowledgeNodes: state.lastNodesState, lastNodesState: undefined });
     case 'ADD_INPUT_HISTORY':
-      return finalizeState({ ...state, inputHistory: [action.payload, ...state.inputHistory].slice(0, 50) });
+      const normalizedHistoryItem =
+        normalizeInputHistoryItem(action.payload, state.currentSubject) || action.payload;
+      return finalizeState({
+        ...state,
+        inputHistory: [
+          normalizedHistoryItem,
+          ...(Array.isArray(state.inputHistory) ? state.inputHistory : []),
+        ].slice(0, 50),
+      });
     case 'DELETE_INPUT_HISTORY':
-      return finalizeState({ ...state, inputHistory: state.inputHistory.filter(h => h.id !== action.payload) });
+      return finalizeState({
+        ...state,
+        inputHistory: (Array.isArray(state.inputHistory) ? state.inputHistory : []).filter(
+          (h) => h.id !== action.payload
+        ),
+      });
     case 'DELETE_MEMORIES_BY_FUNCTION':
       return finalizeState({
         ...state,
@@ -721,7 +738,9 @@ function reducer(state: AppState, action: Action): AppState {
         memories: state.memories.filter(m => m.subject !== action.payload.subject),
         knowledgeNodes: state.knowledgeNodes.filter(n => n.subject !== action.payload.subject),
         textbooks: state.textbooks.filter(t => t.subject !== action.payload.subject),
-        inputHistory: state.inputHistory.filter(h => h.subject !== action.payload.subject),
+        inputHistory: (Array.isArray(state.inputHistory) ? state.inputHistory : []).filter(
+          (h) => h.subject !== action.payload.subject
+        ),
         feedbackEvents: state.feedbackEvents.filter(event => event.subject !== action.payload.subject),
       });
     case 'DELETE_SUBJECT_NODES':
